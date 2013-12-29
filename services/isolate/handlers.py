@@ -30,6 +30,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(BASE_DIR, 'third_party'))
 
 import acl
+from components import auth_ui
 from components import ereporter2
 import config
 import gcs
@@ -1514,6 +1515,13 @@ def CreateApplication():
   if config.is_local_dev_server():
     dev_routes.extend(gcs.URLSigner.switch_to_dev_mode())
 
+  # Routes for auth_ui component ('/auth*').
+  auth_ui.configure(
+      app_name='Isolate Server',
+      app_version=config.get_app_version(),
+      app_revision_url=config.get_app_revision_url())
+  auth_ui_routes = auth_ui.get_routes()
+
   # Namespace can be letters, numbers and '-'.
   namespace = r'/<namespace:[a-z0-9A-Z\-]+>'
   # Do not enforce a length limit to support different hashing algorithm. This
@@ -1522,7 +1530,7 @@ def CreateApplication():
   # This means a complete key is required.
   namespace_key = namespace + hashkey
 
-  return webapp2.WSGIApplication(dev_routes + [
+  return webapp2.WSGIApplication(dev_routes + auth_ui_routes + [
       # Triggers a taskqueue.
       webapp2.Route(
           r'/internal/cron/cleanup/trigger/<name:[a-z]+>',
