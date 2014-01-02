@@ -11,8 +11,10 @@ import re
 from google.appengine.ext import ndb
 from google.appengine.ext.ndb import metadata
 
+from . import utils
+
 __all__ = [
-  'CREATE', 'DELETE', 'READ', 'UPDATE',
+  'CREATE', 'DELETE', 'READ', 'UPDATE', 'GROUP_NAME_RE',
   'Identity', 'IdentityProperty', 'Anonymous', 'IdentityGlob',
   'IdentityGlobProperty',
 ]
@@ -54,13 +56,15 @@ ALLOW_RULE = 'allow'
 DENY_RULE = 'deny'
 
 # Regular expression that matches group names.
-GROUP_NAME_RE = re.compile(r'[0-9a-zA-Z_\-\. ]+$')
+GROUP_NAME_RE = re.compile(r'[0-9a-zA-Z_\-\. ]{3,40}$')
 
-# Global root key of AuthRules entity group, there can be only one...
-AUTH_DB_ROOT_KEY = ndb.Key('AuthRules', 'default')
+# Global root key of AuthRules entity group.
+ROOT_KEY = ndb.Key('AuthRules', 'default')
 
 
-class Identity(collections.namedtuple('Identity', ['kind', 'name'])):
+class Identity(
+    utils.StringSerializable,
+    collections.namedtuple('Identity', ['kind', 'name'])):
   """Represents a caller that can make requests.
 
   A tuple of (kind, name) where 'kind' is one of IDENTITY_* constants and
@@ -75,20 +79,20 @@ class Identity(collections.namedtuple('Identity', ['kind', 'name'])):
   def __init__(self, kind, name):
     if (kind not in ALLOWED_IDENTITY_KINDS or
         not ALLOWED_IDENTITY_KINDS[kind].match(name)):
-      raise ValueError('Identity has invalid format.')
+      raise TypeError('Identity has invalid format.')
     super(Identity, self).__init__(kind, name)
 
   def to_string(self):
     """Serializes this identity to string."""
     return '%s:%s' % (self.kind, self.name)
 
-  @staticmethod
-  def from_string(string):
-    """Given string returns corresponding Identity object."""
+  @classmethod
+  def from_string(cls, string):
+    """Given a string returns corresponding Identity object."""
     kind, sep, name = string.partition(':')
     if not sep:
-      raise ValueError('Missing \':\' separator in Identity string.')
-    return Identity(kind, name)
+      raise TypeError('Missing \':\' separator in Identity string.')
+    return cls(kind, name)
 
   @property
   def is_anonymous(self):
@@ -96,50 +100,34 @@ class Identity(collections.namedtuple('Identity', ['kind', 'name'])):
     return self.kind == IDENTITY_ANONYMOUS
 
 
-
-class IdentityProperty(ndb.StringProperty):
-  """NDB model property for Identity values.
-
-  Identities are stored as strings internally.
-  """
-
-  def _validate(self, value):
-    if not isinstance(value, Identity):
-      raise TypeError('Expecting Identity, got %s' % repr(value))
-
-  def _to_base_type(self, value):
-    return value.to_string()
-
-  def _from_base_type(self, value):
-    return Identity.from_string(value)
-
-
 # Predefined Anonymous identity. While not strictly a singleton, it's still can
 # be used in comparisons like identity_obj == Anonymous.
 Anonymous = Identity(IDENTITY_ANONYMOUS, 'anonymous')
 
 
-class IdentityGlob(collections.namedtuple('IdentityGlob', ['kind', 'pattern'])):
+class IdentityGlob(
+    utils.StringSerializable,
+    collections.namedtuple('IdentityGlob', ['kind', 'pattern'])):
   """Glob like pattern that matches subset of identities."""
 
   def __init__(self, kind, pattern):
     if kind not in ALLOWED_IDENTITY_KINDS:
-      raise ValueError('Invalid Identity kind: %s.' % kind)
+      raise TypeError('Invalid Identity kind: %s.' % kind)
     if ':' in pattern:
-      raise ValueError('Invalid IdentityGlob pattern: %s' % pattern)
+      raise TypeError('Invalid IdentityGlob pattern: %s' % pattern)
     super(IdentityGlob, self).__init__(kind, pattern)
 
   def to_string(self):
     """Serializes this identity glob to string."""
     return '%s:%s' % (self.kind, self.pattern)
 
-  @staticmethod
-  def from_string(string):
-    """Given string returns corresponding IdentityGlob object."""
+  @classmethod
+  def from_string(cls, string):
+    """Given a string returns corresponding IdentityGlob object."""
     kind, sep, pattern = string.partition(':')
     if not sep:
-      raise ValueError('Missing \':\' separator in IdentityGlob string.')
-    return IdentityGlob(kind, pattern)
+      raise TypeError('Missing \':\' separator in IdentityGlob string.')
+    return cls(kind, pattern)
 
   def match(self, identity):
     """Return True if |identity| matches this pattern."""
@@ -150,21 +138,20 @@ class IdentityGlob(collections.namedtuple('IdentityGlob', ['kind', 'pattern'])):
     return fnmatch.fnmatchcase(identity.name, self.pattern)
 
 
-class IdentityGlobProperty(ndb.StringProperty):
+class IdentityProperty(utils.StringSerializableProperty):
+  """NDB model property for Identity values.
+
+  Identities are stored as strings internally.
+  """
+  _value_type = Identity
+
+
+class IdentityGlobProperty(utils.StringSerializableProperty):
   """NDB model property for IdentityGlob values.
 
   IdentityGlobs are stored as string internally.
   """
-
-  def _validate(self, value):
-    if not isinstance(value, IdentityGlob):
-      raise TypeError('Expecting IdentityGlob, got %s' % repr(value))
-
-  def _to_base_type(self, value):
-    return value.to_string()
-
-  def _from_base_type(self, value):
-    return IdentityGlob.from_string(value)
+  _value_type = IdentityGlob
 
 
 class AuthRules(ndb.Model):
@@ -176,11 +163,25 @@ class AuthRules(ndb.Model):
   rules = ndb.JsonProperty()
 
 
-class AuthGroup(ndb.Model):
+class AuthGroup(utils.SerializableModel):
   """A user group.
 
   Id matches group name. Parent entity is AuthRules.
   """
+
+  @classmethod
+  def get_serializable_fields(cls):
+    return {
+      'members': utils.WRITABLE,
+      'globs': utils.WRITABLE,
+      'nested': utils.WRITABLE,
+      'description': utils.WRITABLE,
+      'created_ts': utils.READ_ONLY,
+      'created_by': utils.READ_ONLY,
+      'modified_ts': utils.READ_ONLY,
+      'modified_by': utils.READ_ONLY,
+    }
+
   # List of members that are explicitly in this group. Indexed.
   members = IdentityProperty(repeated=True)
   # List of identity-glob expressions (like 'user:*@example.com'). Indexed.
@@ -189,12 +190,18 @@ class AuthGroup(ndb.Model):
   nested = ndb.StringProperty(repeated=True)
 
   # Human readable description.
-  comment = ndb.StringProperty(indexed=False)
+  description = ndb.StringProperty()
 
-  @property
-  def name(self):
-    """Group name."""
-    return self.key().id()
+  # When the group was created.
+  created_ts = ndb.DateTimeProperty(auto_now_add=True)
+  # How created the group.
+  created_by = IdentityProperty()
+
+  # When group was modified last time, used in conditional requests.
+  modified_ts = ndb.DateTimeProperty(auto_now=True)
+  # Who modified the group last time.
+  modified_by = IdentityProperty()
+
 
 ################################################################################
 
@@ -239,12 +246,24 @@ class AccessRule(_AccessRule):
       raise ValueError('Invalid format of rule dict: %s' % dct)
 
 
+def decode_rules(dct):
+  # TODO(vadimsh): Check format version?
+  return [AccessRule.from_dict(rule) for rule in dct.get('rules', [])]
+
+
+def encode_rules(rules):
+  return {'rules': [rule.to_dict() for rule in rules]}
+
+
+################################################################################
+
+
 class AuthDB(object):
   """Represents an entire read-only database of ACL Rules and User Groups."""
 
   def __init__(self, rules=None, groups=None, entity_group_version=None):
     self.rules = rules or []
-    self.groups = groups or {}
+    self.groups = dict((g.name, g) for g in groups) if groups else {}
     self.entity_group_version = entity_group_version
 
   def is_group_member(self, identity, group):
@@ -276,7 +295,7 @@ class AuthDB(object):
     return False
 
 
-def fetch_auth_db(root_key=AUTH_DB_ROOT_KEY, known_version=None):
+def fetch_auth_db(root_key=ROOT_KEY, known_version=None):
   """Return new instance of AuthDB fetching it from Datastore.
 
   If |known_version| is None, this function always returns a new instance.
@@ -286,14 +305,15 @@ def fetch_auth_db(root_key=AUTH_DB_ROOT_KEY, known_version=None):
   and compare it to |known_version|. It they match, function will return None,
   otherwise it will fetch a fresh copy of AuthDB and return it.
   """
+  # Don't fetch anything if |known_version| is up to date.
   current_version = metadata.get_entity_group_version(root_key)
   if known_version is not None and current_version == known_version:
     return None
 
   # Start fetching root ACL object.
   rules_future = root_key.get_async(use_cache=False)
-  # Meanwhile fetch a list of groups.
-  groups = fetch_groups(root_key)
+  # Meanwhile fetch all groups groups.
+  groups = AuthGroup.query(ancestor=root_key).fetch()
   # Wait for root ACL object to finish fetching.
   rules_entity = rules_future.wait()
 
@@ -304,23 +324,3 @@ def fetch_auth_db(root_key=AUTH_DB_ROOT_KEY, known_version=None):
     return AuthDB()
   else:
     return AuthDB(decode_rules(rules_entity.rules), groups, current_version)
-
-
-def fetch_groups(root_key=AUTH_DB_ROOT_KEY):
-  """Returns a dict: group name -> AuthGroup object."""
-  # Fetch a list of keys to fetch them later with multi_get.
-  # That allows to use NDB cache for actual entity bodies.
-  keys = AuthGroup.query(ancestor=root_key).fetch(keys_only=True)
-  # Now hit NDB cache and get actual groups.
-  return dict((x.name, x) for x in ndb.get_multi(keys, use_cache=False))
-
-
-def decode_rules(dct):
-  # TODO(vadimsh): Check format version?
-  return [AccessRule.from_dict(rule) for rule in dct.get('rules', [])]
-
-
-def encode_rules(rules):
-  return {
-    'rules': [rule.to_dict() for rule in rules],
-  }

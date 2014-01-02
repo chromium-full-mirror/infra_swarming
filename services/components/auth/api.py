@@ -2,29 +2,158 @@
 # Use of this source code is governed by the Apache v2.0 license that can be
 # found in the LICENSE file.
 
-"""Read-only ACL database and identity cache."""
+"""Public API exposed by Auth component."""
 
+import functools
+import inspect
 import os
+import re
 import threading
 import time
 
-from . import errors
+from google.appengine.ext import ndb
+
 from . import model
 
-
 __all__ = [
-  'get_current_identity', 'has_permission', 'ensure_permission',
+  'Error', 'AuthenticationError', 'AuthorizationError', 'UninitializedError',
+  'public', 'require', 'get_current_identity', 'has_permission',
+  'ensure_permission',
 ]
 
 
 # How soon process-global AuthDB cache expires.
 PROCESS_CACHE_EXPIRATION_SEC = 60
 
-# State for process-global AuthDB cache.
+# State for process-global Authentication DB cache.
 _auth_db_lock = threading.Lock()
 _auth_db = None
 _auth_db_expiration = None
 _auth_db_fetching_thread = None
+
+
+class Error(Exception):
+  """Base class for all exceptions raised by auth component."""
+
+  def __init__(self, message=None):
+    super(Error, self).__init__(message or self.__doc__)
+
+
+class AuthenticationError(Error):
+  """Provided credentials are invalid."""
+
+
+class AuthorizationError(Error):
+  """Access is denied."""
+
+
+class UninitializedError(Error):
+  """Authentication context is not initialized."""
+
+
+def is_decorated(func):
+  """Return True if |func| is decorated by @public or @require."""
+  return hasattr(func, '__auth_public') or hasattr(func, '__auth_require')
+
+
+def public(func):
+  """Explicitly marks function as available for non-auth protected access."""
+  # @require decorator sets __auth_require attribute.
+  if hasattr(func, '__auth_require'):
+    raise TypeError('Can\'t use @public and @require on same function')
+  func.__auth_public = True
+  return func
+
+
+def require(action, resource):
+  """Ensures that current identity has a required permission."""
+  def decorator(func):
+    # @public decorator sets __auth_public attribute.
+    if hasattr(func, '__auth_public'):
+      raise TypeError('Can\'t use @public and @require on same function')
+    func.__auth_require = True
+
+    # When nesting multiple decorators information about original function
+    # signature gets lost. Explicitly preserve it in __auth_func_spec.
+    spec = getattr(func, '__auth_func_spec', None)
+    if not spec:
+      spec = inspect.getargspec(func)
+      func.__auth_func_spec = spec
+
+    # Build a function that can substitute variable in resource template.
+    # Do it once when decorating.
+    resource_renderer = _build_resource_renderer(func.__name__, spec, resource)
+
+    # functools.wraps propagates __auth_* from |func| to |wrapper|.
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+      ensure_permission(action, resource_renderer(*args, **kwargs))
+      return func(*args, **kwargs)
+    return wrapper
+
+  return decorator
+
+
+def _build_resource_renderer(func_name, spec, resource):
+  """Returns a function that renders resource template into resource name.
+
+  Returned function accepts positional and keyword arguments of invocation of
+  decorated function, farms out values of variables used in |resource| template
+  and renders that template using these values.
+
+  Args:
+    func_name: Name of the decorated function, for error messages.
+    spec: argspec of the decorated function.
+    resource: resource template that uses variables from |spec|.
+  """
+  # Convert |resource| template from {var} syntax to '%(var)s' syntax.
+  def replacer(match):
+    var = match.group(1)
+    used_vars.add(var)
+    return '%(' + var +')s'
+  used_vars = set()
+  template = re.sub(r'\{(.+)\}', replacer, resource)
+
+  # Template that is just a predefined static resource name?
+  # Don't bother trying to 'render' it.
+  if not used_vars:
+    return lambda *_args, **_kwargs: resource
+
+  # Build dict with default values.
+  defaults = {}
+  if spec.defaults:
+    defaults = dict((spec.args[-i-1], v) for i, v in enumerate(spec.defaults))
+
+  # All template args should be among explicit positional arguments
+  # of the function.
+  for var in used_vars:
+    if var not in spec.args:
+      raise TypeError(
+          'Referencing unknown variable \'%s\' in resource '
+          'template \'%s\'.' % (var, resource))
+
+  # Renderer looks at function call argument and extracts values of variables
+  # used in |resource| template.
+  def renderer(*args, **kwargs):
+    # Add all default argument values first.
+    env = defaults.copy()
+    # Override them with values passed via keyword parameters.
+    env.update(kwargs)
+    # And add positional parameters.
+    env.update((spec.args[i], value) for i, value in enumerate(args))
+    # Now verify that all required arguments are there and types are correct.
+    for var in used_vars:
+      if var not in env:
+        raise TypeError(
+            'Missing required argument \'%s\' in a call to \'%s\' when '
+            'expanding \'%s\'.' % (var, func_name, resource))
+      if not isinstance(env[var], (str, unicode, int, long)):
+        raise TypeError(
+            'Invalid type of argument \'%s\' used in template \'%s\' when '
+            'calling \'%s\': %s' % (var, resource, func_name, type(env[var])))
+    return template % env
+
+  return renderer
 
 
 class RequestCache(object):
@@ -74,10 +203,11 @@ def get_request_cache(ensure_initialized):
     _local_state.request_cache = request_cache
     os.environ['__AUTH_CACHE__'] = '1'
   if ensure_initialized and not request_cache.initialized:
-    raise errors.UninitializedError()
+    raise AssertionError('Authentication context is not initialized.')
   return request_cache
 
 
+@ndb.non_transactional
 def get_cached_auth_db():
   """Returns instance of AuthDB from process global cache.
 
@@ -170,4 +300,4 @@ def has_permission(action, resource):
 def ensure_permission(action, resource):
   """Ensures current identity can execute |action| against |resource|."""
   if not has_permission(action, resource):
-    raise errors.AuthorizationError()
+    raise AuthorizationError()

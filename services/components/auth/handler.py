@@ -4,28 +4,27 @@
 
 """Integration with webapp2."""
 
+import json
 import webapp2
 
 from google.appengine.api import users
 
-from . import cache
-from . import decorators
-from . import errors
+from . import api
 from . import model
 
 __all__ = [
-  'AuthenticatingHandler', 'Authenticator', 'CookieBasedAuthenticator',
-  'configure',
+  'AuthenticatingHandler', 'ApiHandler', 'AuthenticationMethod',
+  'CookieBasedAuthentication', 'configure',
 ]
 
 
 class AuthenticatingHandlerMetaclass(type):
-  """Ensures that 'get', 'post', etc. are marked with ACL decorators."""
+  """Ensures that 'get', 'post', etc. are marked with @require or @public."""
 
   def __new__(cls, name, bases, attributes):
     for method in webapp2.WSGIApplication.allowed_methods:
       func = attributes.get(method.lower())
-      if func and callable(func) and not decorators.is_decorated(func):
+      if func and callable(func) and not api.is_decorated(func):
         raise AssertionError(
             'Method \'%s\' of \'%s\' is not protected by @require or @public '
             'decorator.' % (method.lower(), name))
@@ -47,6 +46,10 @@ class AuthenticatingHandler(webapp2.RequestHandler):
 
   def dispatch(self):
     """Extracts and verifies Identity."""
+    # Perform some initial checks before doing anything more involved.
+    self.validate_request_format()
+
+    # Extract Identity, check credentials.
     identity = model.Anonymous
     is_admin = False
     for authenticator_cls in _authenticators:
@@ -56,12 +59,12 @@ class AuthenticatingHandler(webapp2.RequestHandler):
           assert isinstance(identity, model.Identity)
           assert is_admin in (True, False)
           break
-        except errors.AuthenticationError as err:
+        except api.AuthenticationError as err:
           self.authentication_error(err)
           return
 
     # Successfully extracted and validated an identity, put it in the cache.
-    request_cache = cache.get_request_cache(ensure_initialized=False)
+    request_cache = api.get_request_cache(ensure_initialized=False)
     request_cache.initialize(identity, is_admin)
 
     try:
@@ -72,9 +75,15 @@ class AuthenticatingHandler(webapp2.RequestHandler):
         self.xsrf_token_data = self.parse_xsrf_token()
       """
       # All ACL checks will be performed by corresponding handlers.
-      return webapp2.RequestHandler.dispatch(self)
-    except errors.AuthorizationError as err:
+      return super(AuthenticatingHandler, self).dispatch()
+    except api.AuthorizationError as err:
       self.authorization_error(err)
+
+  def validate_request_format(self):
+    """Ensures request has all required headers, etc.
+
+    Called before authentication.
+    """
 
   def authentication_error(self, error):
     """Called when authentication fails.
@@ -84,7 +93,7 @@ class AuthenticatingHandler(webapp2.RequestHandler):
     and current identity is set to Anonymous.
 
     Args:
-      error: instance of errors.AuthenticationError subclass.
+      error: instance of api.AuthenticationError subclass.
     """
     self.abort(401, detail=str(error))
 
@@ -97,7 +106,39 @@ class AuthenticatingHandler(webapp2.RequestHandler):
     self.abort(403, detail=str(error))
 
 
-class Authenticator(object):
+class ApiHandler(AuthenticatingHandler):
+  """Handler that implements REST-like API with JSON serialization."""
+
+  # Content type of requests and responses.
+  content_type = 'application/json; charset=UTF-8'
+
+  def send_response(self, response, http_code=200, headers=None):
+    """Sends successful reply and continues execution."""
+    self.response.set_status(http_code)
+    self.response.headers.update(headers or {})
+    self.response.headers['Content-Type'] = self.content_type
+    self.response.write(json.dumps(response))
+
+  def abort_with_error(self, http_code, **kwargs):
+    """Sends error reply and stops execution."""
+    self.abort(
+        http_code, json=kwargs, headers={'Content-Type': self.content_type})
+
+  def validate_request_format(self):
+    if self.request.body:
+      content_type = self.request.headers.get('Content-Type')
+      if content_type != self.content_type:
+        msg = 'Expecting JSON body with content type \'%s\'' % self.content_type
+        self.abort_with_error(400, text=msg)
+
+  def authentication_error(self, error):
+    self.abort_with_error(401, text=str(error))
+
+  def authorization_error(self, error):
+    self.abort_with_error(403, text=str(error))
+
+
+class AuthenticationMethod(object):
   """Knows how to authenticate webapp2 requests.
 
   Given Request can extract Identity information from it.
@@ -114,12 +155,12 @@ class Authenticator(object):
 
     Will be called only if is_applicable is True for same request.
 
-    Raises errors.AuthenticationError if credentials are not valid.
+    Raises api.AuthenticationError if credentials are not valid.
     """
     raise NotImplementedError()
 
 
-class CookieBasedAuthenticator(Authenticator):
+class CookieBasedAuthentication(AuthenticationMethod):
   """AppEngine cookie based authentication."""
 
   @classmethod
@@ -132,16 +173,17 @@ class CookieBasedAuthenticator(Authenticator):
     try:
       identity = model.Identity(model.IDENTITY_USER, email)
     except ValueError:
-      raise errors.AuthenticationError('Invalid email format: %s' % email)
+      raise api.AuthenticationError('Invalid email format: %s' % email)
     return identity, users.is_current_user_admin()
 
 
-# Global list of Authenticator classes to use for all request.
-_authenticators = [CookieBasedAuthenticator]
+# Global list of AuthenticationMethod classes to use for all request.
+_authenticators = [CookieBasedAuthentication]
 
 
 def configure(authenticators):
   """Global auth library configuration."""
   global _authenticators
-  assert all(issubclass(auth_cls, Authenticator) for auth_cls in authenticators)
+  assert all(
+      issubclass(auth_cls, AuthenticationMethod) for auth_cls in authenticators)
   _authenticators = authenticators
