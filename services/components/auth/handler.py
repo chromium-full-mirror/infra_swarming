@@ -54,9 +54,6 @@ class AuthenticatingHandler(webapp2.RequestHandler):
   # List of HTTP methods that require valid XSRF token.
   enforce_xsrf_token = ('DELETE', 'POST', 'PUT')
 
-  # Data extracted from XSRF token.
-  xsrf_token_data = None
-
   def dispatch(self):
     """Extracts and verifies Identity."""
     # Perform some initial checks before doing anything more involved.
@@ -82,7 +79,8 @@ class AuthenticatingHandler(webapp2.RequestHandler):
 
     try:
       # Verify XSRF token if required.
-      if self.request.method in self.enforce_xsrf_token:
+      if (authenticator_cls.requires_xsrf_token and
+          self.request.method in self.enforce_xsrf_token):
         self.verify_xsrf_token()
 
       # All other ACL checks will be performed by corresponding handlers
@@ -91,15 +89,12 @@ class AuthenticatingHandler(webapp2.RequestHandler):
     except api.AuthorizationError as err:
       self.authorization_error(err)
 
-  def generate_xsrf_token(self, xsrf_token_data=None):
+  def generate_xsrf_token(self):
     """Returns new XSRF token."""
-    return XSRFToken.generate(
-        [api.get_current_identity().to_string()], xsrf_token_data)
+    return XSRFToken.generate([api.get_current_identity().to_string()])
 
   def verify_xsrf_token(self):
     """Ensures XSRF token is correct.
-
-    Has a side effect: extracts token's embedded data into self.xsrf_token_data.
 
     Raises AuthorizationError if token is missing or incorrect.
     """
@@ -109,8 +104,7 @@ class AuthenticatingHandler(webapp2.RequestHandler):
     if token is None:
       raise api.AuthorizationError('XSRF token is missing')
     try:
-      self.xsrf_token_data = XSRFToken.validate(
-          token, [api.get_current_identity().to_string()])
+      XSRFToken.validate(token, [api.get_current_identity().to_string()])
     except tokens.InvalidTokenError as err:
       raise api.AuthorizationError(str(err))
 
@@ -179,6 +173,9 @@ class AuthenticationMethod(object):
   Given Request can extract Identity information from it.
   """
 
+  # If True AuthenticatingHandler will validate XSRF token.
+  requires_xsrf_token = True
+
   @classmethod
   def is_applicable(cls, request):
     """Returns True if this authenticator can be used with given request."""
@@ -197,6 +194,8 @@ class AuthenticationMethod(object):
 
 class CookieBasedAuthentication(AuthenticationMethod):
   """AppEngine cookie based authentication."""
+
+  requires_xsrf_token = True
 
   @classmethod
   def is_applicable(cls, request):

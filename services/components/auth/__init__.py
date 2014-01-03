@@ -6,7 +6,7 @@
 
 __all__ = []
 
-from . api import *
+from api import *
 __all__.extend(api.__all__)
 
 from tokens import *

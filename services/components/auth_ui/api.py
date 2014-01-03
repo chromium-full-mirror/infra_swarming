@@ -63,16 +63,14 @@ class XSRFHandler(AuthApiHandler):
 
 @route('/auth/api/v1/groups')
 class GroupsHandler(AuthApiHandler):
-  """Group listing, list only basic information (not full group content)."""
+  """Group listing."""
 
   @auth.require(auth.READ, 'auth/management/groups')
   def get(self):
-    projection = ('description', 'created_ts')
-    groups = model.AuthGroup.query(
-        ancestor=model.ROOT_KEY).fetch(projection=projection)
+    groups = model.AuthGroup.query(ancestor=model.ROOT_KEY).fetch()
     self.send_response({
       'groups': [
-        g.to_simple_dict(include=projection, with_id_as='name') for g in groups
+        g.to_simple_dict(with_id_as='name') for g in groups
       ],
     })
 

@@ -17,7 +17,7 @@ __all__ = ['InvalidTokenError', 'Token']
 
 # Name -> (hash to use, how many bytes of digest to use).
 MAC_ALGOS = {
-  'hmac256-128': (hashlib.sha256, 16),
+  'hmac-sha256': (hashlib.sha256, 32),
 }
 
 
@@ -29,7 +29,7 @@ class Token(object):
   """Base class for token types."""
 
   # What algo to use for MAC tag.
-  algo = 'hmac256-128'
+  algo = 'hmac-sha256'
   # Will be added to tagged message so that tokens of different kinds always
   # have different tags (even if payload, secret, timestamp, etc. matches).
   kind = 'unknown'
@@ -116,7 +116,8 @@ def encode_token(secret, message, embedded, algo):
   assert embedded or message
   public = json.dumps(embedded, sort_keys=True, separators=(',', ':'))
   mac = compute_mac(secret, [public] + message, algo)
-  return base64_encode(public + mac)
+  assert '\n' not in public
+  return base64_encode('\n'.join([public, mac]))
 
 
 def decode_token(token, secret, message, algo):
@@ -128,10 +129,9 @@ def decode_token(token, secret, message, algo):
   # Unwrap payload and MAC.
   _, digest_size = MAC_ALGOS[algo]
   try:
-    binary = base64_decode(token)
-    if len(binary) <= digest_size:
+    public, sep, mac = base64_decode(token).partition('\n')
+    if sep != '\n' or len(mac) != digest_size:
       raise ValueError()
-    public, mac = binary[:-digest_size], binary[-digest_size:]
   except ValueError:
     raise InvalidTokenError('Bad token format: %r.' % token)
 
