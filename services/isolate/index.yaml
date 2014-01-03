@@ -10,6 +10,12 @@ indexes:
 # automatically uploaded to the admin console when you next deploy
 # your application using appcfg.py.
 
+- kind: AuthGroup
+  ancestor: yes
+  properties:
+  - name: created_ts
+  - name: description
+
 - kind: ContentEntry
   ancestor: yes
   properties:

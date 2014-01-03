@@ -2,7 +2,11 @@
 # Use of this source code is governed by the Apache v2.0 license that can be
 # found in the LICENSE file.
 
-"""ACL management UI handlers."""
+"""ACL management UI handlers.
+
+It's mostly Javascript-side application that uses service public API,
+so not much code here.
+"""
 
 import jinja2
 import json
@@ -23,8 +27,10 @@ JINJA = jinja2.Environment(
 
 # Top navigation bar links as tuple (id, title, url, auth resource).
 NAVBAR_SECTIONS = (
-    ('main', 'Main', '/auth', 'auth/management/ui'),
+    ('rules', 'Rules', '/auth/rules', 'auth/management/ui'),
+    ('groups', 'Groups', '/auth/groups', 'auth/management/ui'),
 )
+
 
 class UIConfig(object):
   """Global static configuration set in 'configure'."""
@@ -39,12 +45,13 @@ ui_config = UIConfig()
 class UIHandler(auth.AuthenticatingHandler):
   """Renders HTML pages that extend base.html template."""
 
+  template_file = None
   css_file = None
   js_file = None
   navbar_tab_id = None
   page_title = 'ACL Configuration'
 
-  def reply(self, path, env=None, js_config=None, status=200):
+  def reply(self, path, env=None, status=200):
     """Render template |path| to response using given environment."""
     # This goes to both jinja2 env and javascript config.
     common = {
@@ -53,11 +60,10 @@ class UIHandler(auth.AuthenticatingHandler):
     }
 
     # This will be accessible from js as for global 'config' variable.
-    full_js_config = {
+    js_config = {
       'identity': auth.get_current_identity().to_string(),
     }
-    full_js_config.update(common)
-    full_js_config.update(js_config or {})
+    js_config.update(common)
 
     # Filter navbar tabs by removing ones inaccessible to current user.
     navbar = [
@@ -70,7 +76,7 @@ class UIHandler(auth.AuthenticatingHandler):
       'app_name': ui_config.app_name,
       'app_revision_url': ui_config.app_revision_url,
       'app_version': ui_config.app_version,
-      'config': json.dumps(full_js_config),
+      'config': json.dumps(js_config),
       'css_file': self.css_file,
       'identity': auth.get_current_identity(),
       'js_file': self.js_file,
@@ -83,7 +89,7 @@ class UIHandler(auth.AuthenticatingHandler):
 
     # Render it.
     self.response.set_status(status)
-    self.response.headers['Content-Type'] = 'text/html;charset=UTF-8'
+    self.response.headers['Content-Type'] = 'text/html; charset=UTF-8'
     self.response.write(JINJA.get_template(path).render(full_env))
 
   def authorization_error(self, error):
@@ -93,21 +99,38 @@ class UIHandler(auth.AuthenticatingHandler):
     else:
       self.reply('access_denied.html', env={'error': error})
 
-
-class MainHandler(UIHandler):
-  """Renders HTML page with ACLs management UI."""
-
-  page_title = 'ACL Configuration Main'
-  js_file = 'main.js'
-  navbar_tab_id = 'main'
-
   @auth.require(auth.READ, 'auth/management/ui')
   def get(self):
-    self.reply('main.html')
+    assert self.template_file
+    self.reply(self.template_file)
+
+
+class MainHandler(UIHandler):
+  """Blindly redirects to /auth/rules (that is default ACL UI tab)."""
+  @auth.require(auth.READ, 'auth/management/ui')
+  def get(self):
+    self.redirect('/auth/rules')
+
+
+class RulesHandler(UIHandler):
+  """Renders HTML page with ACLs management UI."""
+  template_file = 'rules.html'
+  navbar_tab_id = 'rules'
+  page_title = 'ACL Rules'
+
+
+class GroupsHandler(UIHandler):
+  """Renders HTML page with Group listing."""
+  template_file = 'groups.html'
+  js_file = 'groups.js'
+  navbar_tab_id = 'groups'
+  page_title = 'ACL Groups'
 
 
 def get_routes():
   """Return a list of webapp2 routes to add to WSGI application."""
   return [
     webapp2.Route(r'/auth', MainHandler),
+    webapp2.Route(r'/auth/rules', RulesHandler),
+    webapp2.Route(r'/auth/groups', GroupsHandler),
   ]

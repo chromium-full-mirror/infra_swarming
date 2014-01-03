@@ -7,11 +7,22 @@ body {
   margin-bottom: 20px;
 }
 
-footer hr {
-  margin: 0px 0px;
+#progress-spinner.spinning {
+  background: url(/auth/static/img/gear.gif) no-repeat right center;
+  padding-right: 20px;
+  margin-right: -10px;
 }
 
-/* Revision label */
+#progress-spinner.not-spinning {
+  padding-right: 20px;
+  margin-right: -10px;
+}
+
+footer hr {
+  margin: 10px 0px;
+}
+
+/* Version label */
 #app-rev-block {
   color: #cccccc;
 }

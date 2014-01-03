@@ -30,7 +30,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(BASE_DIR, 'third_party'))
 
 import acl
-from components import auth_ui
+from components.auth_ui import main as auth_ui
 from components import ereporter2
 import config
 import gcs
