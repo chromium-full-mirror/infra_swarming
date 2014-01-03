@@ -11,11 +11,25 @@ from google.appengine.api import users
 
 from . import api
 from . import model
+from . import tokens
 
 __all__ = [
-  'AuthenticatingHandler', 'ApiHandler', 'AuthenticationMethod',
+  'XSRFToken', 'AuthenticatingHandler', 'ApiHandler', 'AuthenticationMethod',
   'CookieBasedAuthentication', 'configure',
 ]
+
+
+# Request header a client can use for XSRF token.
+XSRF_TOKEN_HEADER = 'X-XSRF-Token'
+# GET or POST parameters a client can use for XSRF token.
+XSRF_TOKEN_REQUEST_PARAM = 'token'
+
+
+class XSRFToken(tokens.Token):
+  """XSRF token generation parameters."""
+  kind = 'xsrf'
+  expiration_sec = 2 * 3600
+  secret_id = api.LocalSecret('xsrf_token')
 
 
 class AuthenticatingHandlerMetaclass(type):
@@ -37,9 +51,8 @@ class AuthenticatingHandler(webapp2.RequestHandler):
   # Checks that all 'get', 'post', etc. are marked with @require or @public.
   __metaclass__ = AuthenticatingHandlerMetaclass
 
-  # Set to False if custom processing is required. In that case, a call to
-  # self.parse_xsrf_token() is required inside the post()/put() handler.
-  enforce_xsrf_token = True
+  # List of HTTP methods that require valid XSRF token.
+  enforce_xsrf_token = ('DELETE', 'POST', 'PUT')
 
   # Data extracted from XSRF token.
   xsrf_token_data = None
@@ -68,16 +81,38 @@ class AuthenticatingHandler(webapp2.RequestHandler):
     request_cache.initialize(identity, is_admin)
 
     try:
-      """
-      # Verify XSRF token if required by method handler.
-      self.xsrf_token_data = None
-      if self.request.method in ('POST', 'PUT') and self.enforce_xsrf_token:
-        self.xsrf_token_data = self.parse_xsrf_token()
-      """
-      # All ACL checks will be performed by corresponding handlers.
+      # Verify XSRF token if required.
+      if self.request.method in self.enforce_xsrf_token:
+        self.verify_xsrf_token()
+
+      # All other ACL checks will be performed by corresponding handlers
+      # manually or via 'required' decorator.
       return super(AuthenticatingHandler, self).dispatch()
     except api.AuthorizationError as err:
       self.authorization_error(err)
+
+  def generate_xsrf_token(self, xsrf_token_data=None):
+    """Returns new XSRF token."""
+    return XSRFToken.generate(
+        [api.get_current_identity().to_string()], xsrf_token_data)
+
+  def verify_xsrf_token(self):
+    """Ensures XSRF token is correct.
+
+    Has a side effect: extracts token's embedded data into self.xsrf_token_data.
+
+    Raises AuthorizationError if token is missing or incorrect.
+    """
+    token = (
+        self.request.headers.get(XSRF_TOKEN_HEADER) or
+        self.request.get(XSRF_TOKEN_REQUEST_PARAM))
+    if token is None:
+      raise api.AuthorizationError('XSRF token is missing')
+    try:
+      self.xsrf_token_data = XSRFToken.validate(
+          token, [api.get_current_identity().to_string()])
+    except tokens.InvalidTokenError as err:
+      raise api.AuthorizationError(str(err))
 
   def validate_request_format(self):
     """Ensures request has all required headers, etc.

@@ -57,6 +57,7 @@ class UIHandler(auth.AuthenticatingHandler):
     common = {
       'login_url': users.create_login_url(self.request.path),
       'logout_url': users.create_logout_url('/'),
+      'xsrf_token': self.generate_xsrf_token(),
     }
 
     # This will be accessible from js as for global 'config' variable.

@@ -47,6 +47,20 @@ class AuthApiHandler(auth.ApiHandler):
     return body
 
 
+@route('/auth/api/v1/xsrf_token')
+class XSRFHandler(AuthApiHandler):
+  """Generates XSRF token on demand."""
+
+  # Don't enforce prior XSRF token, it might not be known yet.
+  enforce_xsrf_token = ()
+
+  @auth.public
+  def post(self):
+    if not self.request.headers.get('X-XSRF-Token-Request'):
+      raise auth.AuthorizationError('Missing required XSRF request header')
+    self.send_response({'xsrf_token': self.generate_xsrf_token()})
+
+
 @route('/auth/api/v1/groups')
 class GroupsHandler(AuthApiHandler):
   """Group listing, list only basic information (not full group content)."""

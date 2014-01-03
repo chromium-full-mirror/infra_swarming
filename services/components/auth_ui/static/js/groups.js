@@ -496,6 +496,9 @@ exports.onContentLoaded = function() {
     mainFrame.hideProgressSpinner();
     common.presentError(error);
   });
+
+  // Enable XSRF token auto-updater.
+  api.setXSRFTokenAutoupdate(true);
 }
 
 return exports;

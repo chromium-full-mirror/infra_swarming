@@ -4,6 +4,7 @@
 
 """Public API exposed by Auth component."""
 
+import collections
 import functools
 import inspect
 import os
@@ -11,6 +12,7 @@ import re
 import threading
 import time
 
+from google.appengine.api import app_identity
 from google.appengine.ext import ndb
 
 from . import model
@@ -18,7 +20,7 @@ from . import model
 __all__ = [
   'Error', 'AuthenticationError', 'AuthorizationError', 'UninitializedError',
   'public', 'require', 'get_current_identity', 'has_permission',
-  'ensure_permission',
+  'ensure_permission', 'LocalSecret', 'GlobalSecret', 'get_secret',
 ]
 
 
@@ -301,3 +303,20 @@ def ensure_permission(action, resource):
   """Ensures current identity can execute |action| against |resource|."""
   if not has_permission(action, resource):
     raise AuthorizationError()
+
+
+# Type of secret id object for secret fetched from app-local secret store.
+LocalSecret = collections.namedtuple('LocalSecret', ['name'])
+# Type of secret id object for secret fetched from global secret store.
+GlobalSecret = collections.namedtuple('GlobalSecret', ['name'])
+
+
+def get_secret(secret_id):
+  """Given an instance of LocalSecret or GlobalSecret returns a string."""
+  # TODO
+  if isinstance(secret_id, LocalSecret):
+    return 'local'
+  elif isinstance(cls.secret_id, GlobalSecret):
+    return 'global'
+  else:
+    raise ValueError('Secret key is not defined')

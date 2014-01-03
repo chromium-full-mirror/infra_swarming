@@ -1,6 +1,9 @@
 var api = (function() {
 var exports = {};
+
 var xsrf_token = null;
+var xsrf_token_timer = null;
+var xsrf_update_interval = 30 * 60 * 1000;
 
 
 // Return dict subset of response headers used by API.
@@ -20,8 +23,11 @@ var extractHeaders = function(jqXHR) {
 // On failure result value is
 //    {status: 'error', code: <bad HTTP code>, error: <whatever API returned>}
 var call = function(type, url, data, headers) {
+  // Append XSRF token header to the request if known.
   headers = _.clone(headers || {});
-  // TODO: add XSRF token header here.
+  if (xsrf_token)
+    headers['X-XSRF-Token'] = xsrf_token;
+
   // Launch the request.
   var request = $.ajax({
     type: type,
@@ -38,7 +44,6 @@ var call = function(type, url, data, headers) {
 
   // Convert from jQuery odd signature to saner one.
   request.done(function(data, textStatus, jqXHR) {
-    // TODO: extract new XSRF token here.
     defer.resolve({
       status: textStatus,
       code: jqXHR.status,
@@ -79,6 +84,47 @@ var call = function(type, url, data, headers) {
   });
 
   return defer.promise();
+}
+
+
+// Sets XSRF token.
+exports.setXSRFToken = function(token) {
+  xsrf_token = token;
+}
+
+
+// Refetches XSRF token from server.
+exports.updateXSRFToken = function() {
+  var defer = $.Deferred();
+  var endpoint = '/auth/api/v1/xsrf_token';
+  var headers = {'X-XSRF-Token-Request': '1'};
+  call('POST', endpoint, null, headers).then(function(response) {
+    exports.setXSRFToken(response.data.xsrf_token);
+    defer.resolve(response);
+  }, function(error) {
+    defer.reject(error);
+  });
+  return defer.promise();
+}
+
+
+// Enable XSRF token refresh timer.
+exports.setXSRFTokenAutoupdate = function(autoUpdate) {
+  if (!autoUpdate && xsrf_token_timer) {
+    clearTimeout(xsrf_token_timer);
+    xsrf_token_timer = null;
+  }
+  if (autoUpdate && !xsrf_token_timer) {
+    xsrf_token_timer = setTimeout(function() {
+      var timer_id = xsrf_token_timer;
+      exports.updateXSRFToken().always(function() {
+        if (timer_id == xsrf_token_timer) {
+          xsrf_token_timer = null;
+          exports.setXSRFTokenAutoupdate(true);
+        }
+      });
+    }, xsrf_update_interval);
+  }
 }
 
 
