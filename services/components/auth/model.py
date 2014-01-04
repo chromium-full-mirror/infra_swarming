@@ -14,25 +14,23 @@ from google.appengine.ext.ndb import metadata
 from . import utils
 
 __all__ = [
-  'CREATE', 'DELETE', 'READ', 'UPDATE', 'GROUP_NAME_RE',
-  'Identity', 'IdentityProperty', 'Anonymous', 'IdentityGlob',
-  'IdentityGlobProperty',
+  'CREATE', 'DELETE', 'READ', 'UPDATE', 'Identity', 'Anonymous',
+  'IdentityProperty', 'IdentityGlob', 'IdentityGlobProperty',
 ]
 
 
-# Possible actions that can be applied to a resource.
-CREATE = 0
-DELETE = 1
-READ = 2
-UPDATE = 3
+# Rule types.
+ALLOW_RULE = 'ALLOW'
+DENY_RULE = 'DENY'
 
-# Dict of actions with their names.
-ALLOWED_ACTIONS = {
-    CREATE: 'CREATE',
-    DELETE: 'DELETE',
-    READ: 'READ',
-    UPDATE: 'UPDATE',
-}
+# Possible actions that can be applied to a resource.
+CREATE = 'CREATE'
+DELETE = 'DELETE'
+READ = 'READ'
+UPDATE = 'UPDATE'
+
+# Set of all allowed actions.
+ALLOWED_ACTIONS = frozenset([CREATE, DELETE, READ, UPDATE])
 
 # No identity information is provided. Identity name is always 'anonymous'.
 IDENTITY_ANONYMOUS = 'anonymous'
@@ -51,10 +49,6 @@ ALLOWED_IDENTITY_KINDS = {
     IDENTITY_USER: re.compile(r'[0-9a-zA-Z_\-\.@]+$'),
 }
 
-# Rule types.
-ALLOW_RULE = 'allow'
-DENY_RULE = 'deny'
-
 # Regular expression that matches group names.
 GROUP_NAME_RE = re.compile(r'[0-9a-zA-Z_\-\. ]{3,40}$')
 
@@ -63,9 +57,9 @@ ROOT_KEY = ndb.Key('AuthRules', 'default')
 
 
 class Identity(
-    utils.StringSerializable,
-    collections.namedtuple('Identity', ['kind', 'name'])):
-  """Represents a caller that can make requests.
+    utils.BytesSerializable,
+    collections.namedtuple('Identity', 'kind, name')):
+  """Represents a caller that can make requests. Immutable.
 
   A tuple of (kind, name) where 'kind' is one of IDENTITY_* constants and
   meaning of 'name' depends on kind. It generalizes real people accounts and bot
@@ -73,23 +67,30 @@ class Identity(
 
   It's a pure identity information. Any additional information that may be
   related to an identity (like maybe registration date, etc.) should be stored
-  elsewhere using Identity.to_string() as a primary key.
+  elsewhere using Identity.to_bytes() as a primary key.
   """
 
-  def __init__(self, kind, name):
+  __slots__ = ()
+
+  def __new__(cls, kind, name):
+    if isinstance(name, unicode):
+      try:
+        name = name.encode('ascii')
+      except UnicodeEncodeError:
+        raise TypeError('Identity has invalid format: only ASCII is allowed')
     if (kind not in ALLOWED_IDENTITY_KINDS or
         not ALLOWED_IDENTITY_KINDS[kind].match(name)):
       raise TypeError('Identity has invalid format.')
-    super(Identity, self).__init__(kind, name)
+    return super(cls, Identity).__new__(cls, str(kind), name)
 
-  def to_string(self):
-    """Serializes this identity to string."""
+  def to_bytes(self):
+    """Serializes this identity to byte buffer."""
     return '%s:%s' % (self.kind, self.name)
 
   @classmethod
-  def from_string(cls, string):
-    """Given a string returns corresponding Identity object."""
-    kind, sep, name = string.partition(':')
+  def from_bytes(cls, bytes):
+    """Given a byte buffer returns corresponding Identity object."""
+    kind, sep, name = bytes.partition(':')
     if not sep:
       raise TypeError('Missing \':\' separator in Identity string.')
     return cls(kind, name)
@@ -105,26 +106,42 @@ class Identity(
 Anonymous = Identity(IDENTITY_ANONYMOUS, 'anonymous')
 
 
-class IdentityGlob(
-    utils.StringSerializable,
-    collections.namedtuple('IdentityGlob', ['kind', 'pattern'])):
-  """Glob like pattern that matches subset of identities."""
+class IdentityProperty(utils.BytesSerializableProperty):
+  """NDB model property for Identity values.
 
-  def __init__(self, kind, pattern):
+  Identities are stored as short blobs internally.
+  """
+  _value_type = Identity
+  _indexed = True
+
+
+class IdentityGlob(
+    utils.BytesSerializable,
+    collections.namedtuple('IdentityGlob', 'kind, pattern')):
+  """Glob like pattern that matches subset of identities. Immutable."""
+
+  __slots__ = ()
+
+  def __new__(cls, kind, pattern):
+    if isinstance(pattern, unicode):
+      try:
+        pattern = pattern.encode('ascii')
+      except UnicodeEncodeError:
+        raise TypeError('Invalid IdentityGlob pattern: only ASCII is allowed')
     if kind not in ALLOWED_IDENTITY_KINDS:
       raise TypeError('Invalid Identity kind: %s.' % kind)
     if ':' in pattern:
-      raise TypeError('Invalid IdentityGlob pattern: %s' % pattern)
-    super(IdentityGlob, self).__init__(kind, pattern)
+      raise TypeError('Invalid IdentityGlob pattern: %s.' % pattern)
+    return super(cls, IdentityGlob).__new__(cls, str(kind), pattern)
 
-  def to_string(self):
-    """Serializes this identity glob to string."""
+  def to_bytes(self):
+    """Serializes this identity glob to byte buffer."""
     return '%s:%s' % (self.kind, self.pattern)
 
   @classmethod
-  def from_string(cls, string):
-    """Given a string returns corresponding IdentityGlob object."""
-    kind, sep, pattern = string.partition(':')
+  def from_bytes(cls, bytes):
+    """Given a byte buffer returns corresponding IdentityGlob object."""
+    kind, sep, pattern = bytes.partition(':')
     if not sep:
       raise TypeError('Missing \':\' separator in IdentityGlob string.')
     return cls(kind, pattern)
@@ -138,29 +155,125 @@ class IdentityGlob(
     return fnmatch.fnmatchcase(identity.name, self.pattern)
 
 
-class IdentityProperty(utils.StringSerializableProperty):
-  """NDB model property for Identity values.
-
-  Identities are stored as strings internally.
-  """
-  _value_type = Identity
-
-
-class IdentityGlobProperty(utils.StringSerializableProperty):
+class IdentityGlobProperty(utils.BytesSerializableProperty):
   """NDB model property for IdentityGlob values.
 
-  IdentityGlobs are stored as string internally.
+  IdentityGlobs are stored as short blobs internally.
   """
   _value_type = IdentityGlob
+  _indexed = True
 
 
-class AuthRules(ndb.Model):
+################################################################################
+
+
+class AccessRule(
+    utils.JsonSerializable,
+    collections.namedtuple('AccessRule', 'kind, group, actions, resource')):
+  """Single access rule definition. Immutable."""
+
+  __slots__ = ()
+
+  def __new__(cls, kind, group, actions, resource):
+    # Validate kind, convert to str.
+    if kind not in (ALLOW_RULE, DENY_RULE):
+      raise ValueError('Invalid access rule kind: %s.' % kind)
+    kind = str(kind)
+
+    # Validate group name.
+    if not GROUP_NAME_RE.match(group):
+      raise ValueError('Invalid group name: %s.' % group)
+
+    # Validate action list, convert to str.
+    for action in actions:
+      if action not in ALLOWED_ACTIONS:
+        raise ValueError('Invalid action: %s.' % action)
+    actions = tuple(sorted(map(str, set(actions))))
+
+    # Validate resource regular expression.
+    if not resource.endswith('$'):
+      raise ValueError('Resource pattern should end with \'$\': %s.' % resource)
+    try:
+      resource = re.compile(resource)
+    except re.error:
+      raise ValueError('Invalid resource regexp pattern: %s.' % resource)
+
+    return super(cls, AccessRule).__new__(cls, kind, group, actions, resource)
+
+  def to_jsonish(self):
+    return {
+      'actions': self.actions,
+      'group': self.group,
+      'kind': self.kind,
+      'resource': self.resource.pattern,
+    }
+
+  @classmethod
+  def from_jsonish(cls, obj):
+    try:
+      return cls(obj['kind'], obj['group'], obj['actions'], obj['resource'])
+    except (KeyError, TypeError):
+      raise ValueError('Invalid format of a rule dict: %r.' % obj)
+
+
+class RuleList(utils.JsonSerializable):
+  """List of AccessRules."""
+
+  def __init__(self, rules=None):
+    self.rules = rules or []
+
+  def to_jsonish(self):
+    return [r.to_jsonish() for r in self.rules]
+
+  @classmethod
+  def from_jsonish(cls, obj):
+    if not obj:
+      return cls()
+    if not isinstance(obj, (list, tuple)):
+      raise ValueError(
+          'Expecting a list of rules, got %r instead.' % obj)
+    return cls([AccessRule.from_jsonish(r) for r in obj])
+
+  def get_matching_rules(self, action, resource):
+    """Generator that yields rules that match |action| and |resource|."""
+    for rule in self.rules:
+      if action in rule.actions and rule.resource.match(resource):
+        yield rule
+
+
+class RuleListProperty(utils.JsonSerializableProperty):
+  """NDB model property for RuleList values.
+
+  Stored as JSON blob internally.
+  """
+  _value_type = RuleList
+  _indexed = False
+
+
+################################################################################
+
+
+class AuthRules(utils.SerializableModel):
   """Singleton entity that holds all ACL rules.
 
   Acts as entity root for AuthGroup model.
   """
-  # All ACL rules stored in NDB agnostic format.
-  rules = ndb.JsonProperty()
+
+  @classmethod
+  def get_serializable_fields(cls):
+    return {
+      'rules': utils.WRITABLE,
+      'modified_ts': utils.READ_ONLY,
+      'modified_by': utils.READ_ONLY,
+    }
+
+  # All ACL rules stored as JSON in DB.
+  rules = RuleListProperty()
+
+  # When rules were modified last time, used in conditional requests.
+  modified_ts = ndb.DateTimeProperty(auto_now=True, indexed=False)
+  # Who modified the rules last time.
+  modified_by = IdentityProperty(indexed=False)
 
 
 class AuthGroup(utils.SerializableModel):
@@ -206,63 +319,11 @@ class AuthGroup(utils.SerializableModel):
 ################################################################################
 
 
-_AccessRule = collections.namedtuple(
-    'AccessRule', ['kind', 'actions', 'group', 'resource'])
-
-class AccessRule(_AccessRule):
-  """Single access rule definition."""
-
-  def __init__(self, kind, actions, group, resource):
-    if kind not in (ALLOW_RULE, DENY_RULE):
-      raise ValueError('Invalid access rule kind: %s' % kind)
-    actions = tuple(actions)
-    for action in actions:
-      if action not in ALLOWED_ACTIONS:
-        raise ValueError('Invalid action: %s' % action)
-    if not GROUP_NAME_RE.match(group):
-      raise ValueError('Invalid group name: %s' % group)
-    if not resource.endswith('$'):
-      raise ValueError('Resource pattern should end with $: %s' % resource)
-    try:
-      resource = re.compile(resource)
-    except re.error:
-      raise ValueError('Invalid resource regexp pattern: %s' % resource)
-    super(AccessRule, self).__init__(kind, actions, group, resource)
-
-  def to_dict(self):
-    return {
-      'actions': self.actions,
-      'group': self.group,
-      'kind': self.kind,
-      'resource': self.resource.pattern,
-    }
-
-  @staticmethod
-  def from_dict(dct):
-    try:
-      return AccessRule(
-          dct['kind'], dct['actions'], dct['group'], dct['resource'])
-    except KeyError, TypeError:
-      raise ValueError('Invalid format of rule dict: %s' % dct)
-
-
-def decode_rules(dct):
-  # TODO(vadimsh): Check format version?
-  return [AccessRule.from_dict(rule) for rule in dct.get('rules', [])]
-
-
-def encode_rules(rules):
-  return {'rules': [rule.to_dict() for rule in rules]}
-
-
-################################################################################
-
-
 class AuthDB(object):
   """Represents an entire read-only database of ACL Rules and User Groups."""
 
   def __init__(self, rules=None, groups=None, entity_group_version=None):
-    self.rules = rules or []
+    self.rules = rules or RuleList()
     self.groups = dict((g.name, g) for g in groups) if groups else {}
     self.entity_group_version = entity_group_version
 
@@ -287,10 +348,8 @@ class AuthDB(object):
     """True if |identity| can execute |action| against |resource|."""
     if action not in ALLOWED_ACTIONS:
       return False
-    for rule in self.rules:
-      if (action in rule.actions and
-          rule.resource.match(resource) and
-          self.is_group_member(identity, rule.group)):
+    for rule in self.rules.get_matching_rules(action, resource):
+      if self.is_group_member(identity, rule.group):
         return rule.kind == ALLOW_RULE
     return False
 
@@ -323,4 +382,4 @@ def fetch_auth_db(root_key=ROOT_KEY, known_version=None):
   if rules_entity is None:
     return AuthDB()
   else:
-    return AuthDB(decode_rules(rules_entity.rules), groups, current_version)
+    return AuthDB(rules_entity.rules, groups, current_version)

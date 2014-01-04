@@ -91,7 +91,7 @@ class AuthenticatingHandler(webapp2.RequestHandler):
 
   def generate_xsrf_token(self):
     """Returns new XSRF token."""
-    return XSRFToken.generate([api.get_current_identity().to_string()])
+    return XSRFToken.generate([api.get_current_identity().to_bytes()])
 
   def verify_xsrf_token(self):
     """Ensures XSRF token is correct.
@@ -104,7 +104,7 @@ class AuthenticatingHandler(webapp2.RequestHandler):
     if token is None:
       raise api.AuthorizationError('XSRF token is missing')
     try:
-      XSRFToken.validate(token, [api.get_current_identity().to_string()])
+      XSRFToken.validate(token, [api.get_current_identity().to_bytes()])
     except tokens.InvalidTokenError as err:
       raise api.AuthorizationError(str(err))
 

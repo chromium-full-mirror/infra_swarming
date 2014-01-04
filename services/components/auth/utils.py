@@ -172,25 +172,25 @@ register_converter(
 
 
 ################################################################################
-## StringSerializable properties.
+## BytesSerializable properties.
 
 
-class StringSerializable(object):
-  """Mixing class that defines to_string() and from_string() methods."""
+class BytesSerializable(object):
+  """Mixing class that defines to_bytes() and from_bytes() methods."""
 
-  def to_string(self):
+  def to_bytes(self):
     raise NotImplementedError()
 
   @classmethod
-  def from_string(cls, string):
+  def from_bytes(cls, bytes):
     raise NotImplementedError()
 
 
-class StringSerializableProperty(ndb.StringProperty):
-  """StringProperty that uses values's to_string/from_string methods.
+class BytesSerializableProperty(ndb.BlobProperty):
+  """BlobProperty that uses values's to_bytes/from_bytes methods.
 
-  Property will use to_string() to serialize an object before storing it in
-  DB and from_string() when fetching it from NDB and validating.
+  Property will use to_bytes() to serialize an object before storing it in
+  DB and from_bytes() when fetching it from DB and validating.
   """
 
   # Should be set in subclasses.
@@ -202,14 +202,64 @@ class StringSerializableProperty(ndb.StringProperty):
           'Expecting %s, got %s' % (self._value_type.__name__, repr(value)))
 
   def _to_base_type(self, value):
-    return value.to_string()
+    result = value.to_bytes()
+    assert isinstance(result, str)
+    return result
 
   def _from_base_type(self, value):
-    return self._value_type.from_string(value)
+    assert isinstance(value, str)
+    result = self._value_type.from_bytes(value)
+    assert isinstance(result, self._value_type)
+    return result
 
 
 register_converter(
-    property_cls=StringSerializableProperty,
+    property_cls=BytesSerializableProperty,
     include_subclasses=True,
-    rich_to_simple=lambda prop, obj: obj.to_string(),
-    simple_to_rich=lambda prop, string: prop._value_type.from_string(string))
+    rich_to_simple=lambda prop, value: value.to_bytes(),
+    simple_to_rich=lambda prop, value: prop._value_type.from_bytes(value))
+
+
+################################################################################
+## JsonSerializable properties.
+
+
+class JsonSerializable(object):
+  """Mixing class that defines to_jsonish() and from_jsonish() methods."""
+
+  def to_jsonish(self):
+    raise NotImplementedError()
+
+  @classmethod
+  def from_jsonish(cls, obj):
+    raise NotImplementedError()
+
+
+class JsonSerializableProperty(ndb.JsonProperty):
+  """JsonProperty that uses values's to_jsonish/from_jsonish methods.
+
+  Property will use to_jsonish() to convert an object to simple JSONish value
+  before storing it in DB as JSON and from_jsonish() when fetching it from
+  DB and validating.
+  """
+
+  # Should be set in subclasses.
+  _value_type = None
+
+  def _validate(self, value):
+    if not isinstance(value, self._value_type):
+      raise TypeError(
+          'Expecting %s, got %s' % (self._value_type.__name__, repr(value)))
+
+  def _to_base_type(self, value):
+    return value.to_jsonish()
+
+  def _from_base_type(self, value):
+    return self._value_type.from_jsonish(value)
+
+
+register_converter(
+    property_cls=JsonSerializableProperty,
+    include_subclasses=True,
+    rich_to_simple=lambda prop, value: value.to_jsonish(),
+    simple_to_rich=lambda prop, value: prop._value_type.from_jsonish(value))
