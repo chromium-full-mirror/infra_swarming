@@ -144,30 +144,10 @@ GroupChooser.prototype.setInteractionDisabled = function(disabled) {
 // Main content frame (with loading indicator).
 
 
-var ContentFrame = function($element, $spinner) {
+var ContentFrame = function($element) {
   this.$element = $element;
-  this.$spinner = $spinner;
   this.content = null;
   this.loading = null;
-  this.spinnerCount = 0;
-}
-
-
-// Shows progress indicator.
-ContentFrame.prototype.showProgressSpinner = function() {
-  this.spinnerCount += 1;
-  if (this.spinnerCount == 1)
-    this.$spinner.removeClass('not-spinning').addClass('spinning');
-}
-
-
-// Hides progress indicator.
-ContentFrame.prototype.hideProgressSpinner = function() {
-  if (this.spinnerCount == 0)
-    return;
-  this.spinnerCount -= 1;
-  if (this.spinnerCount == 0)
-    this.$spinner.removeClass('spinning').addClass('not-spinning');
 }
 
 
@@ -186,24 +166,24 @@ ContentFrame.prototype.setContent = function(content) {
 
 
 // Loads new content asynchronously.
-ContentFrame.prototype.loadContent = function(content) {
+ContentFrame.prototype.loadContent = function(content, progressSpinner) {
   var self = this;
   if (self.content)
     self.content.setInteractionDisabled(true);
   self.loading = content;
-  self.showProgressSpinner();
+  progressSpinner.show();
   content.load().then(function() {
     // Still loading same content?
     if (self.loading == content)
       self.setContent(content);
-    self.hideProgressSpinner();
+    progressSpinner.hide();
   }, function(error) {
     // Still loading same content?
     if (self.loading == content) {
       self.setContent(null);
       self.$element.append($(common.render('frame-error-pane', error)));
     }
-    self.hideProgressSpinner();
+    progressSpinner.hide();
   });
 }
 
@@ -354,9 +334,9 @@ EditGroupForm.prototype.buildForm = function(group, lastModified) {
   // Convert some fields to more usable representation.
   group = _.clone(group);
   group.created_ts = common.utcTimestampToString(group.created_ts);
-  group.members = (group.members || []).join('\n');
-  group.globs = (group.globs || []).join('\n');
-  group.nested = (group.nested || []).join('\n');
+  group.members = (group.members || []).join('\n') + '\n';
+  group.globs = (group.globs || []).join('\n') + '\n';
+  group.nested = (group.nested || []).join('\n') + '\n';
 
   var self = this;
   this.$element = $(common.render('edit-group-form-template', group));
@@ -377,11 +357,13 @@ EditGroupForm.prototype.buildForm = function(group, lastModified) {
 
 
 ////////////////////////////////////////////////////////////////////////////////
-// Main entry point set sets up all high-level UI logic.
+// Main entry point, sets up all high-level UI logic.
 
 
 var groupChooser;
 var mainFrame;
+var progressSpinner;
+
 
 // Blocks UI until request completes.
 var waitForResult = function(defer, form) {
@@ -390,13 +372,13 @@ var waitForResult = function(defer, form) {
   var lockUI = function() {
     form.setInteractionDisabled(true);
     groupChooser.setInteractionDisabled(true);
-    mainFrame.showProgressSpinner();
+    progressSpinner.show();
   }
 
   var unlockUI = function() {
     form.setInteractionDisabled(false);
     groupChooser.setInteractionDisabled(false);
-    mainFrame.hideProgressSpinner();
+    progressSpinner.hide();
   }
 
   // Result of this call.
@@ -414,7 +396,7 @@ var waitForResult = function(defer, form) {
       done.resolve(response);
     }, function(error) {
       unlockUI(false);
-      common.presentError(error);
+      common.presentError(error.text);
       done.reject(error);
     });
   }, function(error) {
@@ -446,7 +428,8 @@ exports.onContentLoaded = function() {
 
   // Setup global UI elements.
   groupChooser = new GroupChooser($('#group-chooser'));
-  mainFrame = new ContentFrame($('#main-content-pane'), $('#progress-spinner'));
+  mainFrame = new ContentFrame($('#main-content-pane'));
+  progressSpinner = new common.ProgressSpinner();
 
   // Called to setup 'Create new group' flow.
   var startNewGroupFlow = function() {
@@ -475,7 +458,7 @@ exports.onContentLoaded = function() {
         groupChooser.setSelection(group.name);
       });
     }
-    mainFrame.loadContent(form);
+    mainFrame.loadContent(form, progressSpinner);
   }
 
   // Wire event handlers.
@@ -487,14 +470,14 @@ exports.onContentLoaded = function() {
   });
 
   // Load and show data.
-  mainFrame.showProgressSpinner();
+  progressSpinner.show();
   groupChooser.refetchGroups().then(function() {
-    mainFrame.hideProgressSpinner();
+    progressSpinner.hide();
     groupChooser.selectDefault();
     common.presentContent();
   }, function(error) {
-    mainFrame.hideProgressSpinner();
-    common.presentError(error);
+    progressSpinner.hide();
+    common.presentError(error.text);
   });
 
   // Enable XSRF token auto-updater.

@@ -28,15 +28,15 @@ exports.assert = function(condition, message) {
 // Javascript part fully forms it.
 exports.presentContent = function() {
   $('#content-box').show();
+  $('#error-box').hide();
 }
 
 
 // Fatal error happened during loading. Show it instead of a content.
 exports.presentError = function(errorText) {
-  // TODO(vadimsh): Improve.
-  $('#error-box').text(errorText);
+  $('#error-box #error-message').text(errorText);
   $('#error-box').show();
-  $('#content-box').show();
+  $('#content-box').hide();
 }
 
 
@@ -77,7 +77,6 @@ exports.utcTimestampToString = function(utc) {
 // Renders confirmation dialog. Returns deferred.
 exports.confirm = function(message) {
   var defer = $.Deferred();
-  // TODO: Reimplement using normal UI.
   if (window.confirm(message))
     defer.resolve();
   else
@@ -86,6 +85,43 @@ exports.confirm = function(message) {
 }
 
 
+// Wrapper around 'Im busy' UI indicator.
+exports.ProgressSpinner = function($element) {
+  this.$element = $element || $('#progress-spinner');
+  this.counter = 0;
+}
+
+
+// Shows progress indicator.
+exports.ProgressSpinner.prototype.show = function() {
+  this.counter += 1;
+  if (this.counter == 1)
+    this.$element.removeClass('not-spinning').addClass('spinning');
+}
+
+
+// Hides progress indicator.
+exports.ProgressSpinner.prototype.hide = function() {
+  if (this.counter == 0)
+    return;
+  this.counter -= 1;
+  if (this.counter == 0)
+    this.$element.removeClass('spinning').addClass('not-spinning');
+}
+
+
+// Show spinner, wait for deferred, hide spinner.
+exports.ProgressSpinner.prototype.wrapDeferred = function(defer) {
+  var self = this;
+  self.show();
+  defer.always(function() {
+    self.hide();
+  });
+  return defer;
+}
+
+
+// Setup common for all pages.
 exports.onContentLoaded = function() {
   // Configure form validation plugin to work with bootstrap styles.
   // See http://stackoverflow.com/a/18754780

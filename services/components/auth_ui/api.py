@@ -33,7 +33,9 @@ def route(regexp):
 
 
 class AuthApiHandler(auth.ApiHandler):
-  def parse_body_to_dict(self, required_keys=None):
+  """Parses JSON request body to dict."""
+
+  def parse_body(self, required_keys=None):
     """Parse body json and verifies it\'s a dict that has given keys."""
     try:
       body = json.loads(self.request.body)
@@ -89,6 +91,17 @@ class GroupHandler(AuthApiHandler):
     """Value of 'Location' header based on group entity key."""
     return '/auth/api/v1/groups/%s' % urllib.quote(group_entity.key.string_id())
 
+  def parse_group_body(self, group):
+    """JSON request body -> dict with AuthGroup properties."""
+    try:
+      body = self.parse_body(required_keys=('name',))
+      name = body.pop('name')
+      if name != group:
+        raise ValueError('Mismatching group name.')
+      return model.AuthGroup.convert_simple_dict(body)
+    except (ValueError, TypeError) as err:
+      self.abort_with_error(400, text=str(err))
+
   @auth.require(auth.READ, 'auth/management/groups/{group}')
   def get(self, group):
     """Fetch all information about existing group."""
@@ -104,12 +117,8 @@ class GroupHandler(AuthApiHandler):
   @auth.require(auth.UPDATE, 'auth/management/groups/{group}')
   def put(self, group):
     """Update existing group."""
-    # Parse and validate body, ensure 'name' is same as |group|.
-    body = self.parse_body_to_dict()
-    name = body.pop('name')
-    if name and name != group:
-      self.abort_with_error(400, text='Group rename is not supported.')
-    props = model.AuthGroup.convert_simple_dict(body)
+    # Validate request body.
+    params = self.parse_group_body(group)
 
     @ndb.transactional
     def update():
@@ -122,7 +131,7 @@ class GroupHandler(AuthApiHandler):
       if condition and self.last_modified_header(entity) != condition:
         self.abort_with_error(412, text='Group was modified by someone else.')
       # Update, store.
-      entity.populate(**props)
+      entity.populate(**params)
       entity.modified_by = auth.get_current_identity()
       entity.put()
       # Done.
@@ -135,14 +144,11 @@ class GroupHandler(AuthApiHandler):
   def post(self, group):
     """Create a new group, ensuring it's indeed new."""
     # Validate request body.
-    params = self.parse_body_to_dict(required_keys=('name',))
-    if params['name'] != group:
-      self.abort_with_error(400, text='Bad group name.')
-    name = params.pop('name')
+    params = self.parse_group_body(group)
 
     # Prepare entity for transaction.
-    entity = model.AuthGroup(id=name, parent=model.ROOT_KEY)
-    entity.populate(**entity.convert_simple_dict(params))
+    entity = model.AuthGroup(id=group, parent=model.ROOT_KEY)
+    entity.populate(**params)
     entity.created_by = auth.get_current_identity()
     entity.modified_by = auth.get_current_identity()
 
@@ -165,3 +171,52 @@ class GroupHandler(AuthApiHandler):
     key = ndb.Key(model.AuthGroup, group, parent=model.ROOT_KEY)
     key.delete()
     self.send_response({'ok': True})
+
+
+@route('/auth/api/v1/rules')
+class RulesHandler(AuthApiHandler):
+  """Reading and updating ACL rules."""
+
+  @staticmethod
+  def last_modified_header(rules_entity):
+    """Value of 'Last-Modified' header based on |modified_ts|."""
+    return utils.datetime_to_rfc2822(rules_entity.modified_ts or 0)
+
+  @auth.require(auth.READ, 'auth/management/rules')
+  def get(self):
+    """Fetch all ACL rules."""
+    entity = model.AuthRules.get_or_insert(
+        model.ROOT_KEY.id(),
+        rules=model.RuleList(),
+        modified_by=auth.get_current_identity())
+    assert entity.key == model.ROOT_KEY
+    headers = {
+      'Last-Modified': self.last_modified_header(entity),
+    }
+    self.send_response(entity.to_simple_dict(), headers=headers)
+
+  @auth.require(auth.UPDATE, 'auth/management/rules')
+  def put(self):
+    # Parse and validate body.
+    try:
+      params = model.AuthRules.convert_simple_dict(self.parse_body())
+    except (ValueError, TypeError) as err:
+      self.abort_with_error(400, text=str(err))
+
+    @ndb.transactional
+    def update():
+      # Missing?
+      entity = model.ROOT_KEY.get()
+      # Midair collision?
+      condition = self.request.headers.get('If-Unmodified-Since')
+      if condition and self.last_modified_header(entity) != condition:
+        self.abort_with_error(412, text='Rules were modified by someone else.')
+      # Update, store.
+      entity.populate(**params)
+      entity.modified_by = auth.get_current_identity()
+      entity.put()
+      # Done.
+      self.send_response({'ok': True})
+
+    # Run the transaction.
+    update()

@@ -9,13 +9,13 @@ body {
 
 #progress-spinner.spinning {
   background: url(/auth/static/img/gear.gif) no-repeat right center;
-  padding-right: 20px;
-  margin-right: -10px;
+  padding-right: 25px;
+  margin-right: -8px;
 }
 
 #progress-spinner.not-spinning {
-  padding-right: 20px;
-  margin-right: -10px;
+  padding-right: 25px;
+  margin-right: -8px;
 }
 
 footer hr {

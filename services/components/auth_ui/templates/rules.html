@@ -1,4 +1,32 @@
 {% extends 'base.html' %}
-
 {% block content %}
+
+<div class="row">
+  <div class="col-md-12">
+    <div class="panel panel-default" id="rule-list">
+      <div class="panel-heading"><h3 class="panel-title">ACL Rules</h3></div>
+      <div class="panel-body">
+        <div class="alert alert-danger hidden" id="error-alert-box">
+          <strong id="error-title"></strong> <span id="error-msg"></span>
+        </div>
+        <div class="alert alert-success hidden" id="success-alert-box">
+          <span id="success-msg"></span>
+        </div>
+        <form class="form" role="form" id="rules-form">
+          <div class="form-group">
+            <div style="font-family:monospace;">
+              <textarea class="form-control" rows="20" name="rules"></textarea>
+            </div>
+          </div>
+          <div class="form-group">
+            <button type="submit" class="btn btn-primary">
+              Update rules
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
 {% endblock %}

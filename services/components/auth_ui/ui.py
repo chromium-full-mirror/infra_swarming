@@ -62,7 +62,7 @@ class UIHandler(auth.AuthenticatingHandler):
 
     # This will be accessible from js as for global 'config' variable.
     js_config = {
-      'identity': auth.get_current_identity().to_string(),
+      'identity': auth.get_current_identity().to_bytes(),
     }
     js_config.update(common)
 
@@ -116,6 +116,7 @@ class MainHandler(UIHandler):
 class RulesHandler(UIHandler):
   """Renders HTML page with ACLs management UI."""
   template_file = 'rules.html'
+  js_file = 'rules.js'
   navbar_tab_id = 'rules'
   page_title = 'ACL Rules'
 

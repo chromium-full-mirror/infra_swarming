@@ -178,6 +178,20 @@ exports.groupDelete = function(name, lastModified) {
 }
 
 
+// Fetch all ACL rules.
+exports.rulesRead = function() {
+  return call('GET', '/auth/api/v1/rules');
+}
+
+
+// Update all ACL rules.
+exports.rulesUpdate = function(rules, lastModified) {
+  var headers = {};
+  if (lastModified)
+    headers['If-Unmodified-Since'] = lastModified;
+  return call('PUT', '/auth/api/v1/rules', {rules: rules.rules}, headers);
+}
+
 return exports;
 
 }());
