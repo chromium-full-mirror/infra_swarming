@@ -75,6 +75,15 @@ class ApiHandler(auth.AuthenticatingHandler):
     return body
 
 
+@route('/auth/api/v1/accounts/me')
+class MeHandler(ApiHandler):
+  """Shows identity of a caller."""
+
+  @auth.public
+  def get(self):
+    self.send_response({'identity': auth.get_current_identity().to_bytes()})
+
+
 @route('/auth/api/v1/xsrf_token')
 class XSRFHandler(ApiHandler):
   """Generates XSRF token on demand."""
