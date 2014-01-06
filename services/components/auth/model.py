@@ -53,12 +53,12 @@ ALLOWED_IDENTITY_KINDS = {
 
 # Regular expression that matches group names. No trailing spaces allowed.
 GROUP_NAME_RE = re.compile(
-    r'[0-9a-zA-Z_][0-9a-zA-Z_\-\. ]{2,40}[0-9a-zA-Z_\-\.]$')
+    r'[0-9a-zA-Z_][0-9a-zA-Z_\-\.\ ]{1,40}[0-9a-zA-Z_\-\.]$')
 # Special group name that means 'All possible users' (including anonymous).
 GROUP_ALL = '*'
 
-# Global root key of AuthRules entity group.
-ROOT_KEY = ndb.Key('AuthRules', 'default')
+# Global root key of auth models entity group.
+ROOT_KEY = ndb.Key('AuthGlobalConfig', 'root')
 
 
 class Identity(
@@ -231,11 +231,21 @@ class AccessRuleProperty(utils.JsonSerializableProperty):
 ################################################################################
 
 
-class AuthRules(utils.SerializableModel):
-  """Singleton entity that holds all ACL rules.
+class AuthGlobalConfig(ndb.Model):
+  """Acts as a root entity for all other auth models.
 
-  Acts as entity root for AuthGroup and GlobalSecret models. An entire entity
-  group rooted at this entity is replicated across services.
+  Replicated between services.
+  """
+  # OAuth2 client_id allowed to access the services.
+  oauth_client_ids = ndb.StringProperty(repeated=True, indexed=False)
+
+
+class AuthServiceConfig(utils.SerializableModel):
+  """Holds ACL rules and other configuration for a single service.
+
+  Master auth service have multiple entities of this kind, while each managed
+  service has only one (with id 'default'), that gets replicated from
+  corresponding master entity.
   """
 
   @classmethod
@@ -249,6 +259,11 @@ class AuthRules(utils.SerializableModel):
   # All ACL rules.
   rules = AccessRuleProperty(repeated=True)
 
+  # OAuth2 client_id of the service.
+  oauth_client_id = ndb.StringProperty(indexed=False)
+  # OAuth2 client secret required to mint access_tokens.
+  oauth_client_secret = ndb.StringProperty(indexed=False)
+
   # When rules were modified last time, used in conditional requests.
   modified_ts = ndb.DateTimeProperty(auto_now=True, indexed=False)
   # Who modified the rules last time.
@@ -258,7 +273,7 @@ class AuthRules(utils.SerializableModel):
 class AuthGroup(utils.SerializableModel):
   """A user group.
 
-  Id matches UTF-8 encoded group name. Parent entity is AuthRules.
+  Replicated between services.
   """
 
   @classmethod
@@ -300,13 +315,13 @@ class AuthSecretStore(ndb.Model):
 
 
 class AuthSecret(utils.SerializableModel):
-  """Some shared secret.
+  """Some shared secret with auto-expiration.
 
   Entity can be a child of:
     * Key(AuthSecretStore, 'global', parent=ROOT_KEY):
-        Global secrets shared across services.
+        Global secrets replicated across services.
     * Key(AuthSecretStore, 'local', parent=ROOT_KEY):
-        Secrets local to the service.
+        Secrets local to the current service.
 
   Both parent keys (and thus all AuthSecrets) belong to ROOT_KEY entity group.
   """
@@ -344,17 +359,15 @@ class AuthSecret(utils.SerializableModel):
       self.expiration_ts = None
 
   @classmethod
-  def get_entity_key(cls, name, scope, root_key=ROOT_KEY):
+  def get_entity_key(cls, name, scope):
     """Returns ndb.Key that correspond to a secret key."""
     assert scope in ('local', 'global')
-    return ndb.Key(AuthSecretStore, scope, cls, name, parent=root_key)
+    return ndb.Key(AuthSecretStore, scope, cls, name, parent=ROOT_KEY)
 
   @classmethod
-  def bootstrap(cls, author, name, scope,
-                retention=2, lifetime_sec=0,
-                root_key=ROOT_KEY):
+  def bootstrap(cls, author, name, scope, retention=2, lifetime_sec=0):
     """Creates a secret key if it doesn't exist."""
-    key = cls.get_entity_key(name, scope, root_key)
+    key = cls.get_entity_key(name, scope)
     entity = key.get()
     if entity is not None:
       return entity
@@ -376,18 +389,27 @@ class AuthSecret(utils.SerializableModel):
 class AuthDB(object):
   """Represents an entire read-only database of ACL Rules and User Groups."""
 
-  def __init__(self, rules=None, groups=None,
-               secrets=None, entity_group_version=None):
-    self.rules = rules or AuthRules()
+  def __init__(self, global_config=None, service_config=None,
+               groups=None, secrets=None, entity_group_version=None):
+    self.global_config = global_config or AuthGlobalConfig()
+    self.service_config = service_config or AuthServiceConfig()
     self.groups = dict((g.key.string_id(), g) for g in (groups or []))
     self.secrets = {'local': {}, 'global': {}}
     self.entity_group_version = entity_group_version
+    self.allowed_oauth_client_ids = set()
 
     # Split |secrets| into local and global ones based on parent key.
     for secret in (secrets or []):
       scope = secret.key.parent().string_id()
       if scope in self.secrets:
         self.secrets[scope][secret.key.string_id()] = secret
+
+    # Grab the list of allowed OAuth client_ids.
+    if self.service_config.oauth_client_id:
+      self.allowed_oauth_client_ids.add(self.service_config.oauth_client_id)
+    if self.global_config.oauth_client_ids:
+      self.allowed_oauth_client_ids.update(self.global_config.oauth_client_ids)
+
 
   def get_groups(self, identity=None):
     """Return set of group names that contain |identity| as a member."""
@@ -428,12 +450,12 @@ class AuthDB(object):
 
   def get_rules(self):
     """Return all defined AccessRules."""
-    return self.rules.rules or []
+    return self.service_config.rules or []
 
   def get_matching_rules(self, identity=None, action=None, resource=None):
     """Return list of AccessRules that match given ACL query."""
     rules = []
-    for rule in self.rules.rules:
+    for rule in self.service_config.rules:
       if action and action not in rule.actions:
         continue
       if resource and not rule.resource.match(resource):
@@ -451,7 +473,7 @@ class AuthDB(object):
   def check_identity_has_permission(self, identity, action, resource):
     """True if |identity| can execute |action| against |resource|."""
     assert action in ALLOWED_ACTIONS
-    for rule in self.rules.rules:
+    for rule in self.service_config.rules:
       if (action in rule.actions and
           rule.resource.match(resource) and
           self.is_group_member(identity, rule.group)):
@@ -465,8 +487,13 @@ class AuthDB(object):
     entity = self.secrets[scope].get(name)
     return list(entity.values) if entity and entity.values else None
 
+  def is_allowed_oauth_client_id(self, client_id):
+    """True if given client_id is known."""
+    return client_id and client_id in self.allowed_oauth_client_ids
 
-def fetch_auth_db(root_key=ROOT_KEY, known_version=None):
+
+
+def fetch_auth_db(service='default', known_version=None):
   """Return new instance of AuthDB fetching it from Datastore.
 
   If |known_version| is None, this function always returns a new instance.
@@ -477,20 +504,22 @@ def fetch_auth_db(root_key=ROOT_KEY, known_version=None):
   otherwise it will fetch a fresh copy of AuthDB and return it.
   """
   # Don't fetch anything if |known_version| is up to date.
-  current_version = metadata.get_entity_group_version(root_key)
+  current_version = metadata.get_entity_group_version(ROOT_KEY)
   if known_version is not None and current_version == known_version:
     return None
 
   # Fetching all stuff in parallel.
-  secrets = AuthSecret.query(ancestor=root_key).fetch_async()
-  groups = AuthGroup.query(ancestor=root_key).fetch_async()
-  rules = root_key.get_async(use_cache=False)
+  global_config = ROOT_KEY.get_async()
+  service_config = AuthServiceConfig.get_by_id_async(service, parent=ROOT_KEY)
+  groups = AuthGroup.query(ancestor=ROOT_KEY).fetch_async()
+  secrets = AuthSecret.query(ancestor=ROOT_KEY).fetch_async()
 
   # Note that by that moment |current_version| might not be current anymore.
   # But that's fine, in the worst case next comparison with
   # |known_version| will return False and DB will be refetched.
   return AuthDB(
-      rules=rules.get_result(),
+      global_config=global_config.get_result(),
+      service_config=service_config.get_result(),
       groups=groups.get_result(),
       secrets=secrets.get_result(),
       entity_group_version=current_version)

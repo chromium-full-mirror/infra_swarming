@@ -17,7 +17,7 @@ from google.appengine.ext import ndb
 from . import model
 
 __all__ = [
-  'Error', 'AuthenticationError', 'AuthorizationError', 'UninitializedError',
+  'Error', 'AuthenticationError', 'AuthorizationError',
   'public', 'require', 'get_current_identity', 'has_permission',
   'ensure_permission', 'get_secret',
 ]
@@ -50,10 +50,6 @@ class AuthenticationError(Error):
 
 class AuthorizationError(Error):
   """Access is denied."""
-
-
-class UninitializedError(Error):
-  """Authentication context is not initialized."""
 
 
 def is_decorated(func):
@@ -167,14 +163,12 @@ class RequestCache(object):
   """Holds authentication related information for current request."""
 
   def __init__(self):
-    self.initialized = False
     self.current_identity = None
     self.auth_db = None
+    self.is_admin = False
 
-  def initialize(self, current_identity, is_admin):
+  def set_current_identity(self, current_identity, is_admin):
     """Called early during request processing to set current identity."""
-    assert not self.initialized
-    self.initialized = True
     self.current_identity = current_identity
     self.is_admin = is_admin
 
@@ -191,7 +185,7 @@ class _LocalState(threading.local):
 _local_state = _LocalState()
 
 
-def get_request_cache(ensure_initialized):
+def get_request_cache():
   """Returns instance of RequestCache associated with current request.
 
   A new instance is created for each new HTTP request. We determine
@@ -209,8 +203,6 @@ def get_request_cache(ensure_initialized):
     request_cache = RequestCache()
     _local_state.request_cache = request_cache
     os.environ['__AUTH_CACHE__'] = '1'
-  if ensure_initialized and not request_cache.initialized:
-    raise AssertionError('Authentication context is not initialized')
   return request_cache
 
 
@@ -274,7 +266,7 @@ def get_request_local_auth_db():
   instance of AuthDB. So as long as request runs ACL rules stay consistent and
   doesn't change beneath your feet.
   """
-  cache = get_request_cache(ensure_initialized=True)
+  cache = get_request_cache()
   if cache.auth_db is None:
     cache.auth_db = get_cached_auth_db()
   return cache.auth_db
@@ -282,7 +274,7 @@ def get_request_local_auth_db():
 
 def get_current_identity():
   """Returns Identity associated with current request."""
-  return get_request_cache(ensure_initialized=True).current_identity
+  return get_request_cache().current_identity
 
 
 def check_identity_has_permission(identity, action, resource):
@@ -294,7 +286,7 @@ def check_identity_has_permission(identity, action, resource):
 def has_permission(action, resource):
   """True if current identity can execute |action| against |resource|."""
   # Escape hatch for admins to fix broken ACL rules.
-  if get_request_cache(ensure_initialized=True).is_admin:
+  if get_request_cache().is_admin:
     return True
   return check_identity_has_permission(get_current_identity(), action, resource)
 

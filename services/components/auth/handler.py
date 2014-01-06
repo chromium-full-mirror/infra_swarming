@@ -5,8 +5,10 @@
 """Integration with webapp2."""
 
 import json
+import os
 import webapp2
 
+from google.appengine.api import oauth
 from google.appengine.api import users
 
 from . import api
@@ -15,8 +17,12 @@ from . import tokens
 
 __all__ = [
   'XSRFToken', 'AuthenticatingHandler', 'AuthenticationMethod',
-  'CookieBasedAuthentication', 'bootstrap',
+  'CookieAuthentication', 'OAuthAuthentication', 'bootstrap',
 ]
+
+
+# OAuth2 service scope to use for authentication.
+EMAIL_SCOPE = 'https://www.googleapis.com/auth/userinfo.email'
 
 
 # Request header a client can use for XSRF token.
@@ -62,10 +68,10 @@ class AuthenticatingHandler(webapp2.RequestHandler):
     # Extract Identity, check credentials.
     identity = model.Anonymous
     is_admin = False
-    for authenticator_cls in _authenticators:
-      if authenticator_cls.is_applicable(self.request):
+    for method_cls in _authenticators:
+      if method_cls.is_applicable(self.request):
         try:
-          identity, is_admin = authenticator_cls.authenticate(self.request)
+          identity, is_admin = method_cls.authenticate(self.request)
           assert isinstance(identity, model.Identity)
           assert is_admin in (True, False)
           break
@@ -74,12 +80,11 @@ class AuthenticatingHandler(webapp2.RequestHandler):
           return
 
     # Successfully extracted and validated an identity, put it in the cache.
-    request_cache = api.get_request_cache(ensure_initialized=False)
-    request_cache.initialize(identity, is_admin)
+    api.get_request_cache().set_current_identity(identity, is_admin)
 
     try:
       # Verify XSRF token if required.
-      if (authenticator_cls.requires_xsrf_token and
+      if (method_cls.requires_xsrf_token and
           self.request.method in self.enforce_xsrf_token):
         self.verify_xsrf_token()
 
@@ -160,7 +165,7 @@ class AuthenticationMethod(object):
     raise NotImplementedError()
 
 
-class CookieBasedAuthentication(AuthenticationMethod):
+class CookieAuthentication(AuthenticationMethod):
   """AppEngine cookie based authentication."""
 
   requires_xsrf_token = True
@@ -179,8 +184,38 @@ class CookieBasedAuthentication(AuthenticationMethod):
     return identity, users.is_current_user_admin()
 
 
+class OAuthAuthentication(AuthenticationMethod):
+  """OAuth2 based authentication."""
+
+  requires_xsrf_token = False
+
+  @classmethod
+  def is_applicable(cls, request):
+    # api.oauth stub on dev server is not very good.
+    if 'Dev' in os.environ.get('SERVER_SOFTWARE', ''):
+      return False
+    try:
+      return bool(oauth.get_client_id(EMAIL_SCOPE))
+    except oauth.Error:
+      return False
+
+  @classmethod
+  def authenticate(self, request):
+    auth_db = api.get_request_local_auth_db()
+    client_id = oauth.get_client_id(EMAIL_SCOPE)
+    if not auth_db.is_allowed_oauth_client_id(client_id):
+      raise api.AuthenticationError('Invalid OAuth client_id: %s' % client_id)
+    email = oauth.get_current_user(EMAIL_SCOPE).email()
+    try:
+      identity = model.Identity(model.IDENTITY_USER, email)
+    except ValueError:
+      raise api.AuthenticationError('Invalid email format: %s' % email)
+    return identity, oauth.is_current_user_admin()
+
+
+
 # Global list of AuthenticationMethod classes to use for all request.
-_authenticators = [CookieBasedAuthentication]
+_authenticators = [CookieAuthentication, OAuthAuthentication]
 
 
 def bootstrap(authenticators=None):

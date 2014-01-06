@@ -48,13 +48,8 @@ class _ModelDictConverter(object):
     allowed_fields = self.get_fields_whitelist(model_cls)
     result = {}
     for key, value in model_dict.iteritems():
-      try:
-        if allowed_fields is not None and key not in allowed_fields:
-          raise KeyError(key)
-        prop = model_cls._properties[key]
-      except KeyError:
-        raise TypeError('Unknown model key %s' % key)
-      result[key] = self.convert_property(prop, value)
+      if allowed_fields is None or key in allowed_fields:
+        result[key] = self.convert_property(model_cls._properties[key], value)
     return result
 
   def get_fields_whitelist(self, model_cls):

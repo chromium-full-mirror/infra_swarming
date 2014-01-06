@@ -196,7 +196,8 @@ class RulesHandler(ApiHandler):
   @auth.require(auth.READ, 'auth/management/rules')
   def get(self):
     """Fetch all ACL rules."""
-    entity = model.AuthRules.get_or_insert(model.ROOT_KEY.id())
+    entity = model.AuthServiceConfig.get_or_insert(
+        'default', parent=model.ROOT_KEY)
     headers = {
       'Last-Modified': utils.datetime_to_rfc2822(entity.modified_ts),
     }
@@ -209,7 +210,8 @@ class RulesHandler(ApiHandler):
     @ndb.transactional
     def update(params):
       # Missing?
-      entity = model.ROOT_KEY.get()
+      entity = model.AuthServiceConfig.get_by_id(
+          'default', parent=model.ROOT_KEY)
       # Midair collision?
       given = self.request.headers.get('If-Unmodified-Since')
       expected = utils.datetime_to_rfc2822(entity.modified_ts)
@@ -224,7 +226,7 @@ class RulesHandler(ApiHandler):
 
     # Run the transaction.
     try:
-      update(model.AuthRules.convert_simple_dict(self.parse_body()))
+      update(model.AuthServiceConfig.convert_simple_dict(self.parse_body()))
     except (ValueError, TypeError) as err:
       self.abort_with_error(400, text=str(err))
 
@@ -269,7 +271,7 @@ class RulesHandler(ApiHandler):
 
     # Construct AuthDB with rules under test and all existing groups.
     auth_db = model.AuthDB(
-        rules=model.AuthRules(rules=rule_list),
+        service_config=model.AuthServiceConfig(rules=rule_list),
         groups=model.AuthGroup.query(ancestor=model.ROOT_KEY).fetch())
 
     # Response will contain these.
