@@ -5,7 +5,9 @@
 """NDB model classes used to model AuthDB relations."""
 
 import collections
+import datetime
 import fnmatch
+import os
 import re
 
 from google.appengine.ext import ndb
@@ -83,7 +85,7 @@ class Identity(
         raise TypeError('Identity has invalid format: only ASCII is allowed')
     if (kind not in ALLOWED_IDENTITY_KINDS or
         not ALLOWED_IDENTITY_KINDS[kind].match(name)):
-      raise TypeError('Identity has invalid format.')
+      raise TypeError('Identity has invalid format')
     return super(cls, Identity).__new__(cls, str(kind), name)
 
   def to_bytes(self):
@@ -95,7 +97,7 @@ class Identity(
     """Given a byte buffer returns corresponding Identity object."""
     kind, sep, name = bytes.partition(':')
     if not sep:
-      raise TypeError('Missing \':\' separator in Identity string.')
+      raise TypeError('Missing \':\' separator in Identity string')
     return cls(kind, name)
 
   @property
@@ -132,9 +134,9 @@ class IdentityGlob(
       except UnicodeEncodeError:
         raise TypeError('Invalid IdentityGlob pattern: only ASCII is allowed')
     if kind not in ALLOWED_IDENTITY_KINDS:
-      raise TypeError('Invalid Identity kind: %s.' % kind)
+      raise TypeError('Invalid Identity kind: %s' % kind)
     if ':' in pattern:
-      raise TypeError('Invalid IdentityGlob pattern: %s.' % pattern)
+      raise TypeError('Invalid IdentityGlob pattern: %s' % pattern)
     return super(cls, IdentityGlob).__new__(cls, str(kind), pattern)
 
   def to_bytes(self):
@@ -146,15 +148,13 @@ class IdentityGlob(
     """Given a byte buffer returns corresponding IdentityGlob object."""
     kind, sep, pattern = bytes.partition(':')
     if not sep:
-      raise TypeError('Missing \':\' separator in IdentityGlob string.')
+      raise TypeError('Missing \':\' separator in IdentityGlob string')
     return cls(kind, pattern)
 
   def match(self, identity):
     """Return True if |identity| matches this pattern."""
     if identity.kind != self.kind:
       return False
-    # TODO(vadimsh): fnmatchcase has some odd cache inside, better to replace it
-    # with more explicit one.
     return fnmatch.fnmatchcase(identity.name, self.pattern)
 
 
@@ -180,26 +180,26 @@ class AccessRule(
   def __new__(cls, kind, group, actions, resource):
     # Validate kind, convert to str.
     if kind not in (ALLOW_RULE, DENY_RULE):
-      raise ValueError('Invalid access rule kind: %s.' % kind)
+      raise ValueError('Invalid access rule kind: %s' % kind)
     kind = str(kind)
 
     # Validate group name.
     if not GROUP_NAME_RE.match(group) and group != GROUP_ALL:
-      raise ValueError('Invalid group name: %s.' % group)
+      raise ValueError('Invalid group name: %s' % group)
 
     # Validate action list, convert to str.
     for action in actions:
       if action not in ALLOWED_ACTIONS:
-        raise ValueError('Invalid action: %s.' % action)
+        raise ValueError('Invalid action: %s' % action)
     actions = tuple(sorted(map(str, set(actions))))
 
     # Validate resource regular expression.
     if not resource.endswith('$'):
-      raise ValueError('Resource pattern should end with \'$\': %s.' % resource)
+      raise ValueError('Resource pattern should end with \'$\': %s' % resource)
     try:
       resource = re.compile(resource)
     except re.error:
-      raise ValueError('Invalid resource regexp pattern: %s.' % resource)
+      raise ValueError('Invalid resource regexp pattern: %s' % resource)
 
     return super(cls, AccessRule).__new__(cls, kind, group, actions, resource)
 
@@ -216,7 +216,7 @@ class AccessRule(
     try:
       return cls(obj['kind'], obj['group'], obj['actions'], obj['resource'])
     except (KeyError, TypeError):
-      raise ValueError('Invalid format of a rule dict: %r.' % obj)
+      raise ValueError('Invalid format of a rule dict: %r' % obj)
 
 
 class AccessRuleProperty(utils.JsonSerializableProperty):
@@ -258,7 +258,7 @@ class AuthRules(utils.SerializableModel):
 class AuthGroup(utils.SerializableModel):
   """A user group.
 
-  Id matches group name. Parent entity is AuthRules.
+  Id matches UTF-8 encoded group name. Parent entity is AuthRules.
   """
 
   @classmethod
@@ -295,16 +295,99 @@ class AuthGroup(utils.SerializableModel):
   modified_by = IdentityProperty()
 
 
+class AuthSecretStore(ndb.Model):
+  """Entity kind to act as parent entity for AuthSecret."""
+
+
+class AuthSecret(utils.SerializableModel):
+  """Some shared secret.
+
+  Entity can be a child of:
+    * Key(AuthSecretStore, 'global', parent=ROOT_KEY):
+        Global secrets shared across services.
+    * Key(AuthSecretStore, 'local', parent=ROOT_KEY):
+        Secrets local to the service.
+
+  Both parent keys (and thus all AuthSecrets) belong to ROOT_KEY entity group.
+  """
+  # How many historical values to hold.
+  retention = ndb.IntegerProperty(default=2, indexed=False)
+  # How long a key lives before it needs to be replaced (seconds).
+  lifetime_sec = ndb.IntegerProperty(default=0, indexed=False)
+
+  # When this secret expires and should be replaced.
+  expiration_ts = ndb.DateTimeProperty(indexed=True)
+  # Last |retention| values, most recent first.
+  values = ndb.BlobProperty(repeated=True, indexed=False)
+
+  # When secret was modified last time.
+  modified_ts = ndb.DateTimeProperty(auto_now=True)
+  # Who modified the secret last time.
+  modified_by = IdentityProperty()
+
+  def update(self, secret, author, keep_previous=True):
+    """Generates new key value, optionally remembering previous one."""
+    values = list(self.values or [])
+    if keep_previous:
+      values = [secret] + values[:self.retention]
+    else:
+      if values:
+        values[0] = secret
+      else:
+        values = [secret]
+    self.values = values
+    self.modified_by = author
+    if self.lifetime_sec:
+      lifetime_td = datetime.timedelta(seconds=self.lifetime_sec)
+      self.expiration_ts = datetime.datetime.utcnow() + lifetime_td
+    else:
+      self.expiration_ts = None
+
+  @classmethod
+  def get_entity_key(cls, name, scope, root_key=ROOT_KEY):
+    """Returns ndb.Key that correspond to a secret key."""
+    assert scope in ('local', 'global')
+    return ndb.Key(AuthSecretStore, scope, cls, name, parent=root_key)
+
+  @classmethod
+  def bootstrap(cls, author, name, scope,
+                retention=2, lifetime_sec=0,
+                root_key=ROOT_KEY):
+    """Creates a secret key if it doesn't exist."""
+    key = cls.get_entity_key(name, scope, root_key)
+    entity = key.get()
+    if entity is not None:
+      return entity
+    @ndb.transactional
+    def create():
+      entity = key.get()
+      if entity is not None:
+        return entity
+      entity = cls(key=key, retention=retention, lifetime_sec=lifetime_sec)
+      entity.update(os.urandom(512), author)
+      entity.put()
+      return entity
+    return create()
+
+
 ################################################################################
 
 
 class AuthDB(object):
   """Represents an entire read-only database of ACL Rules and User Groups."""
 
-  def __init__(self, rules=None, groups=None, entity_group_version=None):
+  def __init__(self, rules=None, groups=None,
+               secrets=None, entity_group_version=None):
     self.rules = rules or AuthRules()
-    self.groups = dict((g.key.string_id(), g) for g in groups) if groups else {}
+    self.groups = dict((g.key.string_id(), g) for g in (groups or []))
+    self.secrets = {'local': {}, 'global': {}}
     self.entity_group_version = entity_group_version
+
+    # Split |secrets| into local and global ones based on parent key.
+    for secret in (secrets or []):
+      scope = secret.key.parent().string_id()
+      if scope in self.secrets:
+        self.secrets[scope][secret.key.string_id()] = secret
 
   def get_groups(self, identity=None):
     """Return set of group names that contain |identity| as a member."""
@@ -375,6 +458,13 @@ class AuthDB(object):
         return rule.kind == ALLOW_RULE
     return False
 
+  def get_secret(self, name, scope):
+    """Returns list of strings with last known values of a secret key."""
+    if scope not in self.secrets:
+      raise ValueError('Invalid secret key scope')
+    entity = self.secrets[scope].get(name)
+    return list(entity.values) if entity and entity.values else None
+
 
 def fetch_auth_db(root_key=ROOT_KEY, known_version=None):
   """Return new instance of AuthDB fetching it from Datastore.
@@ -391,12 +481,16 @@ def fetch_auth_db(root_key=ROOT_KEY, known_version=None):
   if known_version is not None and current_version == known_version:
     return None
 
-  # Fetching root AuthRules object and all groups in parallel.
-  rules_future = root_key.get_async(use_cache=False)
-  groups = AuthGroup.query(ancestor=root_key).fetch()
-  rules_entity = rules_future.wait()
+  # Fetching all stuff in parallel.
+  secrets = AuthSecret.query(ancestor=root_key).fetch_async()
+  groups = AuthGroup.query(ancestor=root_key).fetch_async()
+  rules = root_key.get_async(use_cache=False)
 
   # Note that by that moment |current_version| might not be current anymore.
   # But that's fine, in the worst case next comparison with
   # |known_version| will return False and DB will be refetched.
-  return AuthDB(rules_entity, groups, current_version)
+  return AuthDB(
+      rules=rules.get_result(),
+      groups=groups.get_result(),
+      secrets=secrets.get_result(),
+      entity_group_version=current_version)

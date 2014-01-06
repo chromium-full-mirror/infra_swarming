@@ -15,7 +15,7 @@ from . import tokens
 
 __all__ = [
   'XSRFToken', 'AuthenticatingHandler', 'AuthenticationMethod',
-  'CookieBasedAuthentication', 'configure',
+  'CookieBasedAuthentication', 'bootstrap',
 ]
 
 
@@ -29,7 +29,7 @@ class XSRFToken(tokens.Token):
   """XSRF token generation parameters."""
   kind = 'xsrf'
   expiration_sec = 2 * 3600
-  secret_id = api.LocalSecret('xsrf_token')
+  secret_key = api.SecretKey('xsrf_token', 'local')
 
 
 class AuthenticatingHandlerMetaclass(type):
@@ -41,7 +41,7 @@ class AuthenticatingHandlerMetaclass(type):
       if func and callable(func) and not api.is_decorated(func):
         raise AssertionError(
             'Method \'%s\' of \'%s\' is not protected by @require or @public '
-            'decorator.' % (method.lower(), name))
+            'decorator' % (method.lower(), name))
     return type.__new__(cls, name, bases, attributes)
 
 
@@ -183,9 +183,17 @@ class CookieBasedAuthentication(AuthenticationMethod):
 _authenticators = [CookieBasedAuthentication]
 
 
-def configure(authenticators):
+def bootstrap(authenticators=None):
   """Global auth library configuration."""
   global _authenticators
-  assert all(
-      issubclass(auth_cls, AuthenticationMethod) for auth_cls in authenticators)
-  _authenticators = authenticators
+  if authenticators is not None:
+    assert all(issubclass(cls, AuthenticationMethod) for cls in authenticators)
+    _authenticators = list(authenticators)
+
+  # Set up all initial secrets.
+  model.AuthSecret.bootstrap(
+      author=None,
+      name=XSRFToken.secret_key.name,
+      scope=XSRFToken.secret_key.scope,
+      retention=5,
+      lifetime_sec=3600)

@@ -12,7 +12,6 @@ import re
 import threading
 import time
 
-from google.appengine.api import app_identity
 from google.appengine.ext import ndb
 
 from . import model
@@ -20,9 +19,13 @@ from . import model
 __all__ = [
   'Error', 'AuthenticationError', 'AuthorizationError', 'UninitializedError',
   'public', 'require', 'get_current_identity', 'has_permission',
-  'ensure_permission', 'LocalSecret', 'GlobalSecret', 'get_secret',
+  'ensure_permission', 'get_secret',
 ]
 
+
+# Identifies a secret. Can be service-local (scope == 'local') or global across
+# all services (scope == 'global').
+SecretKey = collections.namedtuple('SecretKey', ['name', 'scope'])
 
 # How soon process-global AuthDB cache expires.
 PROCESS_CACHE_EXPIRATION_SEC = 60
@@ -76,11 +79,10 @@ def require(action, resource):
     func.__auth_require = True
 
     # When nesting multiple decorators information about original function
-    # signature gets lost. Explicitly preserve it in __auth_func_spec.
-    spec = getattr(func, '__auth_func_spec', None)
-    if not spec:
-      spec = inspect.getargspec(func)
-      func.__auth_func_spec = spec
+    # gets lost. Explicitly preserve it in __wrapped__. It is also what
+    # NDB does. So 'require' decorator plays nicely with ndb decorators.
+    original = getattr(func, '__wrapped__', func)
+    spec = inspect.getargspec(original)
 
     # Build a function that can substitute variable in resource template.
     # Do it once when decorating.
@@ -91,6 +93,9 @@ def require(action, resource):
     def wrapper(*args, **kwargs):
       ensure_permission(action, resource_renderer(*args, **kwargs))
       return func(*args, **kwargs)
+
+    # Store reference to original function.
+    wrapper.__wrapped__ = original
     return wrapper
 
   return decorator
@@ -132,7 +137,7 @@ def _build_resource_renderer(func_name, spec, resource):
     if var not in spec.args:
       raise TypeError(
           'Referencing unknown variable \'%s\' in resource '
-          'template \'%s\'.' % (var, resource))
+          'template \'%s\'' % (var, resource))
 
   # Renderer looks at function call argument and extracts values of variables
   # used in |resource| template.
@@ -148,7 +153,7 @@ def _build_resource_renderer(func_name, spec, resource):
       if var not in env:
         raise TypeError(
             'Missing required argument \'%s\' in a call to \'%s\' when '
-            'expanding \'%s\'.' % (var, func_name, resource))
+            'expanding \'%s\'' % (var, func_name, resource))
       if not isinstance(env[var], (str, unicode, int, long)):
         raise TypeError(
             'Invalid type of argument \'%s\' used in template \'%s\' when '
@@ -167,7 +172,7 @@ class RequestCache(object):
     self.auth_db = None
 
   def initialize(self, current_identity, is_admin):
-    """Called early during request processing to assign an identity."""
+    """Called early during request processing to set current identity."""
     assert not self.initialized
     self.initialized = True
     self.current_identity = current_identity
@@ -205,7 +210,7 @@ def get_request_cache(ensure_initialized):
     _local_state.request_cache = request_cache
     os.environ['__AUTH_CACHE__'] = '1'
   if ensure_initialized and not request_cache.initialized:
-    raise AssertionError('Authentication context is not initialized.')
+    raise AssertionError('Authentication context is not initialized')
   return request_cache
 
 
@@ -300,18 +305,13 @@ def ensure_permission(action, resource):
     raise AuthorizationError()
 
 
-# Type of secret id object for secret fetched from app-local secret store.
-LocalSecret = collections.namedtuple('LocalSecret', ['name'])
-# Type of secret id object for secret fetched from global secret store.
-GlobalSecret = collections.namedtuple('GlobalSecret', ['name'])
+def get_secret(secret_key):
+  """Given an instance of SecretKey returns a list of strings.
 
+  First item in the list is current value of a secret key, all other values are
+  previous values of the key.
 
-def get_secret(secret_id):
-  """Given an instance of LocalSecret or GlobalSecret returns a string."""
-  # TODO
-  if isinstance(secret_id, LocalSecret):
-    return 'local'
-  elif isinstance(cls.secret_id, GlobalSecret):
-    return 'global'
-  else:
-    raise ValueError('Secret key is not defined')
+  Returns None if no such key.
+  """
+  return get_request_local_auth_db().get_secret(
+      secret_key.name, secret_key.scope)

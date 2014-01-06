@@ -32,7 +32,7 @@ def route(regexp):
   return decorator
 
 
-class AuthApiHandler(auth.AuthenticatingHandler):
+class ApiHandler(auth.AuthenticatingHandler):
   """Parses JSON request body to dict."""
 
   # Content type of requests and responses.
@@ -61,25 +61,22 @@ class AuthApiHandler(auth.AuthenticatingHandler):
 
   def abort_with_error(self, http_code, **kwargs):
     """Sends error reply and stops execution."""
-    self.abort(
-        http_code, json=kwargs, headers={'Content-Type': self.content_type})
+    self.abort(http_code,
+        json=kwargs, headers={'Content-Type': self.content_type})
 
-  def parse_body(self, required_keys=None):
+  def parse_body(self):
     """Parse body json and verifies it\'s a dict that has given keys."""
     try:
       body = json.loads(self.request.body)
+      if not isinstance(body, dict):
+        raise ValueError()
     except ValueError:
-      self.abort_with_error(400, text='Not a valid json body.')
-    if not isinstance(body, dict):
-      self.abort_with_error(400, text='Expecting json dict.')
-    for key in (required_keys or []):
-      if key not in body:
-        self.abort_with_error(400, text='Missing required key \'%s\'.' % key)
+      self.abort_with_error(400, text='Not a valid json dict body')
     return body
 
 
 @route('/auth/api/v1/xsrf_token')
-class XSRFHandler(AuthApiHandler):
+class XSRFHandler(ApiHandler):
   """Generates XSRF token on demand."""
 
   # Don't enforce prior XSRF token, it might not be known yet.
@@ -93,7 +90,7 @@ class XSRFHandler(AuthApiHandler):
 
 
 @route('/auth/api/v1/groups')
-class GroupsHandler(AuthApiHandler):
+class GroupsHandler(ApiHandler):
   """Group listing."""
 
   @auth.require(auth.READ, 'auth/management/groups')
@@ -107,16 +104,16 @@ class GroupsHandler(AuthApiHandler):
 
 
 @route('/auth/api/v1/groups/<group:%s>' % model.GROUP_NAME_RE.pattern)
-class GroupHandler(AuthApiHandler):
+class GroupHandler(ApiHandler):
   """Creating, reading, updating and deleting a single group."""
 
   def parse_group_body(self, group):
     """JSON request body -> dict with AuthGroup properties."""
     try:
-      body = self.parse_body(required_keys=('name',))
-      name = body.pop('name')
-      if name != group:
-        raise ValueError('Mismatching group name.')
+      body = self.parse_body()
+      name = body.pop('name', None)
+      if not name or name != group:
+        raise ValueError('Missing or mismatching group name in request body')
       return model.AuthGroup.convert_simple_dict(body)
     except (ValueError, TypeError) as err:
       self.abort_with_error(400, text=str(err))
@@ -126,7 +123,7 @@ class GroupHandler(AuthApiHandler):
     """Fetch all information about existing group."""
     entity = model.AuthGroup.get_by_id(group, parent=model.ROOT_KEY)
     if not entity:
-      self.abort_with_error(404, text='No such group.')
+      self.abort_with_error(404, text='No such group')
     headers = {
       'Last-Modified': utils.datetime_to_rfc2822(entity.modified_ts),
     }
@@ -142,12 +139,12 @@ class GroupHandler(AuthApiHandler):
       # Missing?
       entity = model.AuthGroup.get_by_id(group, parent=model.ROOT_KEY)
       if not entity:
-        self.abort_with_error(404, text='No such group.')
+        self.abort_with_error(404, text='No such group')
       # Midair collision?
       given = self.request.headers.get('If-Unmodified-Since')
       expected = utils.datetime_to_rfc2822(entity.modified_ts)
       if given and given != expected:
-        self.abort_with_error(412, text='Group was modified by someone else.')
+        self.abort_with_error(412, text='Group was modified by someone else')
       # Update, store.
       entity.populate(**params)
       entity.modified_by = auth.get_current_identity()
@@ -173,7 +170,7 @@ class GroupHandler(AuthApiHandler):
     @ndb.transactional
     def create():
       if entity.key.get():
-        self.abort_with_error(409, text='Such group already exists.')
+        self.abort_with_error(409, text='Such group already exists')
       entity.put()
       headers = {
         'Last-Modified': utils.datetime_to_rfc2822(entity.modified_ts),
@@ -193,7 +190,7 @@ class GroupHandler(AuthApiHandler):
 
 
 @route('/auth/api/v1/rules')
-class RulesHandler(AuthApiHandler):
+class RulesHandler(ApiHandler):
   """Reading and updating ACL rules."""
 
   @auth.require(auth.READ, 'auth/management/rules')
@@ -217,7 +214,7 @@ class RulesHandler(AuthApiHandler):
       given = self.request.headers.get('If-Unmodified-Since')
       expected = utils.datetime_to_rfc2822(entity.modified_ts)
       if given and given != expected:
-        self.abort_with_error(412, text='Rules were modified by someone else.')
+        self.abort_with_error(412, text='Rules were modified by someone else')
       # Update, store.
       entity.populate(**params)
       entity.modified_by = auth.get_current_identity()
@@ -233,14 +230,14 @@ class RulesHandler(AuthApiHandler):
 
 
 @route('/auth/api/v1/rules/check')
-class RulesHandler(AuthApiHandler):
+class RulesHandler(ApiHandler):
   """Executing test queries against ACL rules."""
 
   @auth.require(auth.UPDATE, 'auth/management/rules')
   def post(self):
     """Check given ACL rules."""
     # Convert request body to dict.
-    body = self.parse_body(required_keys=('rules',))
+    body = self.parse_body()
 
     # Parse identity (if given).
     identity = body.get('identity')
@@ -255,15 +252,17 @@ class RulesHandler(AuthApiHandler):
     # Extract resource (if given).
     resource = body['resource'] if body.get('resource') else None
     if resource and not isinstance(resource, basestring):
-      self.abort_with_error(400, text='Bad resource name.')
+      self.abort_with_error(400, text='Bad resource name')
 
     # Extract action (if given).
     action = body['action'] if body.get('action') else None
     if action and action not in model.ALLOWED_ACTIONS:
-      self.abort_with_error(400, text='Invalid action.')
+      self.abort_with_error(400, text='Invalid action')
 
-    # Parse 'rules' json dict into AccessRule list.
+    # Parse 'rules' into AccessRule list.
     try:
+      if not isinstance(body.get('rules'), list):
+        raise ValueError('Missing or invalid \'rules\' entry')
       rule_list = [model.AccessRule.from_jsonish(r) for r in body['rules']]
     except (ValueError, TypeError) as err:
       self.abort_with_error(400, text=str(err))

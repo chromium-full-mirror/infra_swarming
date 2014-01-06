@@ -41,8 +41,8 @@ var ruleToString = function(rule) {
   return String.format(
       '{0} | {1} | {2} | {3}',
       padWithSpaces(rule.kind, 6),
-      padWithSpaces(rule.group, 24),
-      padWithSpaces(actions, 28),
+      padWithSpaces(rule.group, 20),
+      padWithSpaces(actions, 24),
       rule.resource);
 }
 
@@ -181,7 +181,7 @@ RuleList.prototype.onSubmit = function() {
   var self = this;
   request.then(function() {
     self.refetch().done(function() {
-      self.showMessage('success', 'Done!', 'ACL rules updated.');
+      self.showMessage('success', 'Done!', 'Rules updated.');
     });
   }, function(error) {
     self.showMessage('error', 'Error:', error.error.text || error.text);
