@@ -234,7 +234,8 @@ class AccessRuleProperty(utils.JsonSerializableProperty):
 class AuthRules(utils.SerializableModel):
   """Singleton entity that holds all ACL rules.
 
-  Acts as entity root for all other models.
+  Acts as entity root for AuthGroup and GlobalSecret models. An entire entity
+  group rooted at this entity is replicated across services.
   """
 
   @classmethod
@@ -311,34 +312,45 @@ class AuthDB(object):
       return set(self.groups)
     return set(g for g in self.groups if self.is_group_member(identity, g))
 
-  def is_group_member(self, identity, group):
+  def is_group_member(self, identity, group, _seen=None):
     """Return True if |identity| belongs to group |group|."""
+    # Wildcard group that matches all identities (including anonymous).
     if group == GROUP_ALL:
       return True
+
+    # Unknown group is by convention empty.
     group_obj = self.groups.get(group)
     if not group_obj:
       return False
+
+    # Use _seen to avoid infinite recursion of group nesting graph has cycles.
+    _seen = _seen or set()
+    if group in _seen:
+      return False
+    _seen.add(group)
+
     for glob in group_obj.globs:
       if glob.match(identity):
         return True
+
     for member in group_obj.members:
       if identity == member:
         return True
-    # TODO(vadimsh): If group nesting graph has cycles, this can stuck.
+
     for nested in group_obj.nested:
-      if self.is_group_member(identity, nested):
+      if self.is_group_member(identity, nested, _seen=_seen):
         return True
+
     return False
 
   def get_rules(self):
-    """Return all rules."""
+    """Return all defined AccessRules."""
     return self.rules.rules or []
 
   def get_matching_rules(self, identity=None, action=None, resource=None):
-    """Return list of AccessRules that match given query."""
+    """Return list of AccessRules that match given ACL query."""
     rules = []
     for rule in self.rules.rules:
-      print rule
       if action and action not in rule.actions:
         continue
       if resource and not rule.resource.match(resource):
@@ -346,8 +358,8 @@ class AuthDB(object):
       if identity and not self.is_group_member(identity, rule.group):
         continue
       # First matched rule terminates ACL evaluation, so if complete triple is
-      # given, do not even show all other rules.
-      if action and resource and identity:
+      # given do not even show all other rules.
+      if identity and action and resource:
         return [rule]
       rules.append(rule)
     # No rules match -> apply default 'deny all' rule.
@@ -379,17 +391,12 @@ def fetch_auth_db(root_key=ROOT_KEY, known_version=None):
   if known_version is not None and current_version == known_version:
     return None
 
-  # Start fetching root ACL object.
+  # Fetching root AuthRules object and all groups in parallel.
   rules_future = root_key.get_async(use_cache=False)
-  # Meanwhile fetch all groups groups.
   groups = AuthGroup.query(ancestor=root_key).fetch()
-  # Wait for root ACL object to finish fetching.
   rules_entity = rules_future.wait()
 
   # Note that by that moment |current_version| might not be current anymore.
   # But that's fine, in the worst case next comparison with
   # |known_version| will return False and DB will be refetched.
-  if rules_entity is None:
-    return AuthDB()
-  else:
-    return AuthDB(rules_entity, groups, current_version)
+  return AuthDB(rules_entity, groups, current_version)

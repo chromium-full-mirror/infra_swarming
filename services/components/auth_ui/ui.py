@@ -49,7 +49,7 @@ class UIHandler(auth.AuthenticatingHandler):
   css_file = None
   js_file = None
   navbar_tab_id = None
-  page_title = 'ACL Configuration'
+  page_title = None
 
   def reply(self, path, env=None, status=200):
     """Render template |path| to response using given environment."""

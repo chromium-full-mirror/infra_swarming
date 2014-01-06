@@ -32,8 +32,37 @@ def route(regexp):
   return decorator
 
 
-class AuthApiHandler(auth.ApiHandler):
+class AuthApiHandler(auth.AuthenticatingHandler):
   """Parses JSON request body to dict."""
+
+  # Content type of requests and responses.
+  content_type = 'application/json; charset=UTF-8'
+
+  def validate_request_format(self):
+    """Ensures body has JSON content type."""
+    if self.request.body:
+      content_type = self.request.headers.get('Content-Type')
+      if content_type != self.content_type:
+        msg = 'Expecting JSON body with content type \'%s\'' % self.content_type
+        self.abort_with_error(400, text=msg)
+
+  def authentication_error(self, error):
+    self.abort_with_error(401, text=str(error))
+
+  def authorization_error(self, error):
+    self.abort_with_error(403, text=str(error))
+
+  def send_response(self, response, http_code=200, headers=None):
+    """Sends successful reply and continues execution."""
+    self.response.set_status(http_code)
+    self.response.headers.update(headers or {})
+    self.response.headers['Content-Type'] = self.content_type
+    self.response.write(json.dumps(response))
+
+  def abort_with_error(self, http_code, **kwargs):
+    """Sends error reply and stops execution."""
+    self.abort(
+        http_code, json=kwargs, headers={'Content-Type': self.content_type})
 
   def parse_body(self, required_keys=None):
     """Parse body json and verifies it\'s a dict that has given keys."""
@@ -250,7 +279,7 @@ class RulesHandler(AuthApiHandler):
     matching_rules = None
 
     # Get all rules that mention non-existing groups.
-    groups = auth_db.get_groups()
+    groups = auth_db.get_groups() | set('*')
     unrecognized_groups = [
       rule.group for rule in auth_db.get_rules()
       if rule.group not in groups

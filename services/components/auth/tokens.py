@@ -34,7 +34,7 @@ class Token(object):
   # have different tags (even if payload, secret, timestamp, etc. matches).
   kind = 'unknown'
   # Format version number that will be embedded into the token.
-  version = '1'
+  version = 1
   # If set defines how long token can live.
   expiration_sec = None
   # Name of the secret key to use when generating and validating the token.
@@ -46,18 +46,17 @@ class Token(object):
     """Generates a token that contains signature for |message|."""
     embedded = (embedded or {}).copy()
     assert not any(k.startswith('_') for k in embedded), '_<id> is reserved'
-    embedded['_v'] = cls.version
     if cls.expiration_sec is not None:
       embedded['_x'] = str(int(time.time() * 1000 + cls.expiration_sec * 1000))
     return encode_token(
-        api.get_secret(cls.secret_id), [cls.kind] + message, embedded, cls.algo)
+        cls.version, api.get_secret(cls.secret_id), [cls.kind] + message,
+        embedded, cls.algo)
 
   @classmethod
   def validate(cls, token, message):
     """Validates token signature and extracts embedded data from token."""
-    embedded = decode_token(
+    version, embedded = decode_token(
         token, api.get_secret(cls.secret_id), [cls.kind] + message, cls.algo)
-    version = embedded.pop('_v', None)
     if version != cls.version:
       raise InvalidTokenError(
           'Bad token format version. '
@@ -108,16 +107,24 @@ def compute_mac(secret, chunks, algo):
   return mac.digest()[:digest_size]
 
 
-def encode_token(secret, message, embedded, algo):
-  """Wraps, tags and encodes a token."""
+def encode_token(version, secret, message, embedded, algo):
+  """Wraps, tags and encodes a token.
+
+  Anatomy of an encoded token:
+    base64(<version byte> + payload json + mac(<version byte> + payload json))
+  Where:
+    <version byte> - one byte that defines version of a token format.
+    payload json - compactly serialized json dict with token payload.
+    mac - binary MAC tag of known size (may depend on version).
+  """
+  assert isinstance(version, int) and 0 <= version <= 255
   assert isinstance(secret, str) and secret
   assert isinstance(embedded, dict)
   assert isinstance(message, list)
   assert embedded or message
   public = json.dumps(embedded, sort_keys=True, separators=(',', ':'))
-  mac = compute_mac(secret, [public] + message, algo)
-  assert '\n' not in public
-  return base64_encode('\n'.join([public, mac]))
+  mac = compute_mac(secret, [str(version), public] + message, algo)
+  return base64_encode(''.join([chr(version), public, mac]))
 
 
 def decode_token(token, secret, message, algo):
@@ -126,17 +133,20 @@ def decode_token(token, secret, message, algo):
   assert isinstance(token, str)
   assert isinstance(message, list)
 
-  # Unwrap payload and MAC.
+  # Unwrap version, payload and MAC.
   _, digest_size = MAC_ALGOS[algo]
   try:
-    public, sep, mac = base64_decode(token).partition('\n')
-    if sep != '\n' or len(mac) != digest_size:
+    binary = base64_decode(token)
+    if len(binary) <= digest_size + 2:
       raise ValueError()
+    version = ord(binary[0])
+    public = binary[1:-digest_size]
+    mac = binary[-digest_size:]
   except ValueError:
     raise InvalidTokenError('Bad token format: %r.' % token)
 
   # Validate MAC tag in constant time.
-  good_mac = compute_mac(secret, [public] + message, algo)
+  good_mac = compute_mac(secret, [str(version), public] + message, algo)
   assert len(good_mac) == len(mac)
   accum = 0
   for x, y in zip(mac, good_mac):
@@ -144,5 +154,5 @@ def decode_token(token, secret, message, algo):
   if accum:
     raise InvalidTokenError('Bad token MAC.')
 
-  # Return embedded token data.
-  return json.loads(public)
+  # Return version and embedded token data.
+  return version, json.loads(public)

@@ -283,15 +283,13 @@ SandboxModal.prototype.reportToText = function(report) {
     }
     text.push('');
   }
-  text.push('Matching rules:');
   if (report.matchingRules) {
+    text.push('Matching rules:');
     _.each(report.matchingRules, function(rule) {
       text.push('  ' + ruleToString(rule));
     });
-  } else {
-    text.push('  skipped');
+    text.push('');
   }
-  text.push('');
   return text.join('\n');
 }
 

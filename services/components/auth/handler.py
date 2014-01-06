@@ -14,7 +14,7 @@ from . import model
 from . import tokens
 
 __all__ = [
-  'XSRFToken', 'AuthenticatingHandler', 'ApiHandler', 'AuthenticationMethod',
+  'XSRFToken', 'AuthenticatingHandler', 'AuthenticationMethod',
   'CookieBasedAuthentication', 'configure',
 ]
 
@@ -133,38 +133,6 @@ class AuthenticatingHandler(webapp2.RequestHandler):
       error: instance of AuthorizationError subclass.
     """
     self.abort(403, detail=str(error))
-
-
-class ApiHandler(AuthenticatingHandler):
-  """Handler that implements REST-like API with JSON serialization."""
-
-  # Content type of requests and responses.
-  content_type = 'application/json; charset=UTF-8'
-
-  def send_response(self, response, http_code=200, headers=None):
-    """Sends successful reply and continues execution."""
-    self.response.set_status(http_code)
-    self.response.headers.update(headers or {})
-    self.response.headers['Content-Type'] = self.content_type
-    self.response.write(json.dumps(response))
-
-  def abort_with_error(self, http_code, **kwargs):
-    """Sends error reply and stops execution."""
-    self.abort(
-        http_code, json=kwargs, headers={'Content-Type': self.content_type})
-
-  def validate_request_format(self):
-    if self.request.body:
-      content_type = self.request.headers.get('Content-Type')
-      if content_type != self.content_type:
-        msg = 'Expecting JSON body with content type \'%s\'' % self.content_type
-        self.abort_with_error(400, text=msg)
-
-  def authentication_error(self, error):
-    self.abort_with_error(401, text=str(error))
-
-  def authorization_error(self, error):
-    self.abort_with_error(403, text=str(error))
 
 
 class AuthenticationMethod(object):

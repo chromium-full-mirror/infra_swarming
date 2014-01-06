@@ -280,11 +280,6 @@ def get_current_identity():
   return get_request_cache(ensure_initialized=True).current_identity
 
 
-def is_current_user_admin():
-  """Return True if current request is running from an admin account."""
-  return get_request_cache(ensure_initialized=True).is_admin
-
-
 def check_identity_has_permission(identity, action, resource):
   """True if |identity| can execute |action| against |resource|."""
   return get_request_local_auth_db().check_identity_has_permission(
@@ -294,7 +289,7 @@ def check_identity_has_permission(identity, action, resource):
 def has_permission(action, resource):
   """True if current identity can execute |action| against |resource|."""
   # Escape hatch for admins to fix broken ACL rules.
-  if is_current_user_admin():
+  if get_request_cache(ensure_initialized=True).is_admin:
     return True
   return check_identity_has_permission(get_current_identity(), action, resource)
 
