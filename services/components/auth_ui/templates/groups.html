@@ -27,9 +27,7 @@
 <script id="new-group-form-template" type="text/x-handlebars-template">
   <div class="panel panel-default">
     <div class="panel-body">
-      <div class="alert alert-danger hidden" id="alert-box">
-        <strong>Oh snap!</strong> <span id="error-msg"></span>
-      </div>
+      <div id="alerts"></div>
       <form class="form-horizontal" role="form">
         <div class="form-group">
           <label class="col-sm-2">Group name</label>
@@ -77,9 +75,7 @@
   <div class="panel panel-default">
     <div class="panel-heading"><h3 class="panel-title">{{name}}</h3></div>
     <div class="panel-body">
-      <div class="alert alert-danger hidden" id="alert-box">
-        <strong>Oh snap!</strong> <span id="error-msg"></span>
-      </div>
+      <div id="alerts"></div>
       <form class="form-horizontal" role="form">
         <input type="hidden" name="name" value="{{name}}">
         <div class="form-group">

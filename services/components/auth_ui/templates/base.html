@@ -30,6 +30,20 @@ found in the LICENSE file. -->
   {% if js_file %}
     <script src="/auth/static/js/{{js_file}}"></script>
   {% endif %}
+
+{% raw %}
+<!-- Templates. -->
+
+<script id="alert-box-template" type="text/x-handlebars-template">
+  <div class="alert {{cls}} alert-dismissable">
+    <button type="button" class="close"
+            data-dismiss="alert" aria-hidden="true">&times;</button>
+    <strong>{{title}}</strong> {{message}}
+  </div>
+</script>
+
+{% endraw %}
+
 </head>
 
 <body>

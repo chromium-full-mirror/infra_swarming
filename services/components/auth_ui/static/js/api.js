@@ -192,6 +192,18 @@ exports.rulesUpdate = function(rules, lastModified) {
   return call('PUT', '/auth/api/v1/rules', {rules: rules.rules}, headers);
 }
 
+
+// Perform a test query against ACL rules.
+exports.rulesCheck = function(params) {
+  return call('POST', '/auth/api/v1/rules/check', {
+    rules: params.rules,
+    identity: params.identity,
+    resource: params.resource,
+    action: params.action
+  });
+}
+
+
 return exports;
 
 }());

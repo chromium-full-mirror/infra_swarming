@@ -81,16 +81,6 @@ class GroupsHandler(AuthApiHandler):
 class GroupHandler(AuthApiHandler):
   """Creating, reading, updating and deleting a single group."""
 
-  @staticmethod
-  def last_modified_header(group_entity):
-    """Value of 'Last-Modified' header based on |modified_ts|."""
-    return utils.datetime_to_rfc2822(group_entity.modified_ts or 0)
-
-  @staticmethod
-  def location_header(group_entity):
-    """Value of 'Location' header based on group entity key."""
-    return '/auth/api/v1/groups/%s' % urllib.quote(group_entity.key.string_id())
-
   def parse_group_body(self, group):
     """JSON request body -> dict with AuthGroup properties."""
     try:
@@ -109,7 +99,7 @@ class GroupHandler(AuthApiHandler):
     if not entity:
       self.abort_with_error(404, text='No such group.')
     headers = {
-      'Last-Modified': self.last_modified_header(entity),
+      'Last-Modified': utils.datetime_to_rfc2822(entity.modified_ts),
     }
     self.send_response(
         {'group': entity.to_simple_dict(with_id_as='name')}, headers=headers)
@@ -117,28 +107,26 @@ class GroupHandler(AuthApiHandler):
   @auth.require(auth.UPDATE, 'auth/management/groups/{group}')
   def put(self, group):
     """Update existing group."""
-    # Validate request body.
-    params = self.parse_group_body(group)
 
     @ndb.transactional
-    def update():
+    def update(params):
       # Missing?
       entity = model.AuthGroup.get_by_id(group, parent=model.ROOT_KEY)
       if not entity:
         self.abort_with_error(404, text='No such group.')
       # Midair collision?
-      condition = self.request.headers.get('If-Unmodified-Since')
-      if condition and self.last_modified_header(entity) != condition:
+      given = self.request.headers.get('If-Unmodified-Since')
+      expected = utils.datetime_to_rfc2822(entity.modified_ts)
+      if given and given != expected:
         self.abort_with_error(412, text='Group was modified by someone else.')
       # Update, store.
       entity.populate(**params)
       entity.modified_by = auth.get_current_identity()
       entity.put()
-      # Done.
       self.send_response({'ok': True})
 
     # Run the transaction.
-    update()
+    update(self.parse_group_body(group))
 
   @auth.require(auth.CREATE, 'auth/management/groups/{group}')
   def post(self, group):
@@ -159,10 +147,12 @@ class GroupHandler(AuthApiHandler):
         self.abort_with_error(409, text='Such group already exists.')
       entity.put()
       headers = {
-        'Last-Modified': self.last_modified_header(entity),
-        'Location': self.location_header(entity),
+        'Last-Modified': utils.datetime_to_rfc2822(entity.modified_ts),
+        'Location': '/auth/api/v1/groups/%s' % urllib.quote(entity.key.id()),
       }
       self.send_response({'ok': True}, http_code=201, headers=headers)
+
+    # Run the transaction.
     create()
 
   @auth.require(auth.DELETE, 'auth/management/groups/{group}')
@@ -177,39 +167,27 @@ class GroupHandler(AuthApiHandler):
 class RulesHandler(AuthApiHandler):
   """Reading and updating ACL rules."""
 
-  @staticmethod
-  def last_modified_header(rules_entity):
-    """Value of 'Last-Modified' header based on |modified_ts|."""
-    return utils.datetime_to_rfc2822(rules_entity.modified_ts or 0)
-
   @auth.require(auth.READ, 'auth/management/rules')
   def get(self):
     """Fetch all ACL rules."""
-    entity = model.AuthRules.get_or_insert(
-        model.ROOT_KEY.id(),
-        rules=model.RuleList(),
-        modified_by=auth.get_current_identity())
-    assert entity.key == model.ROOT_KEY
+    entity = model.AuthRules.get_or_insert(model.ROOT_KEY.id())
     headers = {
-      'Last-Modified': self.last_modified_header(entity),
+      'Last-Modified': utils.datetime_to_rfc2822(entity.modified_ts),
     }
     self.send_response(entity.to_simple_dict(), headers=headers)
 
   @auth.require(auth.UPDATE, 'auth/management/rules')
   def put(self):
-    # Parse and validate body.
-    try:
-      params = model.AuthRules.convert_simple_dict(self.parse_body())
-    except (ValueError, TypeError) as err:
-      self.abort_with_error(400, text=str(err))
+    """Update all ACL rules."""
 
     @ndb.transactional
-    def update():
+    def update(params):
       # Missing?
       entity = model.ROOT_KEY.get()
       # Midair collision?
-      condition = self.request.headers.get('If-Unmodified-Since')
-      if condition and self.last_modified_header(entity) != condition:
+      given = self.request.headers.get('If-Unmodified-Since')
+      expected = utils.datetime_to_rfc2822(entity.modified_ts)
+      if given and given != expected:
         self.abort_with_error(412, text='Rules were modified by someone else.')
       # Update, store.
       entity.populate(**params)
@@ -219,4 +197,82 @@ class RulesHandler(AuthApiHandler):
       self.send_response({'ok': True})
 
     # Run the transaction.
-    update()
+    try:
+      update(model.AuthRules.convert_simple_dict(self.parse_body()))
+    except (ValueError, TypeError) as err:
+      self.abort_with_error(400, text=str(err))
+
+
+@route('/auth/api/v1/rules/check')
+class RulesHandler(AuthApiHandler):
+  """Executing test queries against ACL rules."""
+
+  @auth.require(auth.UPDATE, 'auth/management/rules')
+  def post(self):
+    """Check given ACL rules."""
+    # Convert request body to dict.
+    body = self.parse_body(required_keys=('rules',))
+
+    # Parse identity (if given).
+    identity = body.get('identity')
+    if identity:
+      try:
+        identity = model.Identity.from_bytes(identity)
+      except (ValueError, TypeError) as err:
+        self.abort_with_error(400, text=str(err))
+    else:
+      identity = None
+
+    # Extract resource (if given).
+    resource = body['resource'] if body.get('resource') else None
+    if resource and not isinstance(resource, basestring):
+      self.abort_with_error(400, text='Bad resource name.')
+
+    # Extract action (if given).
+    action = body['action'] if body.get('action') else None
+    if action and action not in model.ALLOWED_ACTIONS:
+      self.abort_with_error(400, text='Invalid action.')
+
+    # Parse 'rules' json dict into AccessRule list.
+    try:
+      rule_list = [model.AccessRule.from_jsonish(r) for r in body['rules']]
+    except (ValueError, TypeError) as err:
+      self.abort_with_error(400, text=str(err))
+
+    # Construct AuthDB with rules under test and all existing groups.
+    auth_db = model.AuthDB(
+        rules=model.AuthRules(rules=rule_list),
+        groups=model.AuthGroup.query(ancestor=model.ROOT_KEY).fetch())
+
+    # Response will contain these.
+    unrecognized_groups = None
+    identity_groups = None
+    matching_rules = None
+
+    # Get all rules that mention non-existing groups.
+    groups = auth_db.get_groups()
+    unrecognized_groups = [
+      rule.group for rule in auth_db.get_rules()
+      if rule.group not in groups
+    ]
+
+    # Identity is given -> see what groups it belongs to.
+    if identity:
+      identity_groups = sorted(auth_db.get_groups(identity))
+
+    # Identity or resource given -> see relevant rules.
+    if identity or action or resource:
+      matching_rules = [
+        rule.to_jsonish()
+        for rule in auth_db.get_matching_rules(identity, action, resource)
+      ]
+
+    # Done.
+    self.send_response({
+      'identity': identity.to_bytes() if identity else None,
+      'resource': resource,
+      'action': action,
+      'unrecognizedGroups': unrecognized_groups,
+      'identityGroups': identity_groups,
+      'matchingRules': matching_rules,
+    })

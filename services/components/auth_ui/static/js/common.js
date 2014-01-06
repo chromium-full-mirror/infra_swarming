@@ -60,6 +60,14 @@ exports.render = function(templateId, context) {
 }
 
 
+// Returns chunk of HTML code with form alert mark up.
+exports.getAlertBoxHtml = function(type, title, message) {
+  var cls = type == 'success' ? 'alert-success' : 'alert-danger';
+  return exports.render(
+      'alert-box-template', {cls: cls, title: title, message: message});
+}
+
+
 // Converts UTC timestamp (in milliseconds) to a readable string in local TZ.
 // Based on http://stackoverflow.com/a/7412756
 exports.utcTimestampToString = function(utc) {
@@ -86,14 +94,14 @@ exports.confirm = function(message) {
 
 
 // Wrapper around 'Im busy' UI indicator.
-exports.ProgressSpinner = function($element) {
-  this.$element = $element || $('#progress-spinner');
+var ProgressSpinner = function() {
+  this.$element = $('#progress-spinner');
   this.counter = 0;
 }
 
 
 // Shows progress indicator.
-exports.ProgressSpinner.prototype.show = function() {
+ProgressSpinner.prototype.show = function() {
   this.counter += 1;
   if (this.counter == 1)
     this.$element.removeClass('not-spinning').addClass('spinning');
@@ -101,23 +109,12 @@ exports.ProgressSpinner.prototype.show = function() {
 
 
 // Hides progress indicator.
-exports.ProgressSpinner.prototype.hide = function() {
+ProgressSpinner.prototype.hide = function() {
   if (this.counter == 0)
     return;
   this.counter -= 1;
   if (this.counter == 0)
     this.$element.removeClass('spinning').addClass('not-spinning');
-}
-
-
-// Show spinner, wait for deferred, hide spinner.
-exports.ProgressSpinner.prototype.wrapDeferred = function(defer) {
-  var self = this;
-  self.show();
-  defer.always(function() {
-    self.hide();
-  });
-  return defer;
 }
 
 
@@ -141,6 +138,16 @@ exports.onContentLoaded = function() {
         error.insertAfter(element);
       }
     }
+  });
+
+
+  // Install 'Ajax is running' indicator.
+  var progressSpinner = new ProgressSpinner();
+  $(document).ajaxStart(function() {
+    progressSpinner.show();
+  });
+  $(document).ajaxStop(function() {
+    progressSpinner.hide();
   });
 }
 

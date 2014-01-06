@@ -8,7 +8,10 @@ var exports = {};
 
 // Splits 'value' on lines boundaries and returns lines as array.
 var splitItemList = function(value) {
-  return _.filter(value.split('\n'), function(item) {
+  var trimmed = _.map(value.split('\n'), function(item) {
+    return item.trim();
+  });
+  return _.filter(trimmed, function(item) {
     return !!item;
   });
 }
@@ -42,15 +45,12 @@ var GroupChooser = function($element) {
 // Loads list of groups from a server. Updates group chooser UI.
 // Returns deferred.
 GroupChooser.prototype.refetchGroups = function() {
+  var defer = api.groups();
   var self = this;
-  var defer = $.Deferred();
-  api.groups().then(function(response) {
+  defer.then(function(response) {
     self.setGroupList(response.data.groups);
-    defer.resolve();
-  }, function(error) {
-    defer.reject(error);
   });
-  return defer.promise();
+  return defer;
 }
 
 
@@ -166,24 +166,21 @@ ContentFrame.prototype.setContent = function(content) {
 
 
 // Loads new content asynchronously.
-ContentFrame.prototype.loadContent = function(content, progressSpinner) {
+ContentFrame.prototype.loadContent = function(content) {
   var self = this;
   if (self.content)
     self.content.setInteractionDisabled(true);
   self.loading = content;
-  progressSpinner.show();
   content.load().then(function() {
     // Still loading same content?
     if (self.loading == content)
       self.setContent(content);
-    progressSpinner.hide();
   }, function(error) {
     // Still loading same content?
     if (self.loading == content) {
       self.setContent(null);
       self.$element.append($(common.render('frame-error-pane', error)));
     }
-    progressSpinner.hide();
   });
 }
 
@@ -218,17 +215,16 @@ GroupForm.prototype.setInteractionDisabled = function(disabled) {
 }
 
 
-// Call failed with a error, display it.
-GroupForm.prototype.showError = function(error) {
-  var text = error.error.text || error.text;
-  $('#alert-box #error-msg', this.$element).text(text);
-  $('#alert-box', this.$element).removeClass('hidden');
+// Shows error or success message.
+GroupForm.prototype.showMessage = function(type, title, message) {
+  $('#alerts', this.$element).html(
+      common.getAlertBoxHtml(type, title, message));
 }
 
 
-// Hide previously visible error message.
-GroupForm.prototype.hideError = function() {
-  $('#alert-box', this.$element).addClass('hidden');
+// Hides error or success message.
+GroupForm.prototype.hideMessage = function() {
+  $('#alerts', this.$element).empty();
 }
 
 
@@ -243,14 +239,17 @@ GroupForm.prototype.hookUpHandlers = function($form, submitHandler) {
       var globs = $('form textarea[name=globs]', self.$element).val();
       var nested = $('form textarea[name=nested]', self.$element).val();
       // And call callback.
-      submitHandler({
-          name: name,
-          description: description,
-          members: splitItemList(members),
-          globs: splitItemList(globs),
-          nested: splitItemList(nested)
-      });
-      return false;
+      try {
+        submitHandler({
+            name: name.trim(),
+            description: description.trim(),
+            members: splitItemList(members),
+            globs: splitItemList(globs),
+            nested: splitItemList(nested)
+        });
+      } finally {
+        return false;
+      }
     },
     rules: {
       'name': {
@@ -317,15 +316,12 @@ EditGroupForm.prototype = Object.create(GroupForm.prototype);
 
 // Load contents of this from from the server.
 EditGroupForm.prototype.load = function() {
+  var defer = api.groupRead(this.groupName);
   var self = this;
-  var defer = $.Deferred();
-  api.groupRead(this.groupName).then(function(response) {
+  defer.then(function(response) {
     self.buildForm(response.data.group, response.headers['Last-Modified']);
-    defer.resolve();
-  }, function(error) {
-    defer.reject(error);
   });
-  return defer.promise();
+  return defer;
 }
 
 
@@ -362,7 +358,6 @@ EditGroupForm.prototype.buildForm = function(group, lastModified) {
 
 var groupChooser;
 var mainFrame;
-var progressSpinner;
 
 
 // Blocks UI until request completes.
@@ -372,20 +367,18 @@ var waitForResult = function(defer, form) {
   var lockUI = function() {
     form.setInteractionDisabled(true);
     groupChooser.setInteractionDisabled(true);
-    progressSpinner.show();
   }
 
   var unlockUI = function() {
     form.setInteractionDisabled(false);
     groupChooser.setInteractionDisabled(false);
-    progressSpinner.hide();
   }
 
   // Result of this call.
   var done = $.Deferred();
 
   // Lock UI while running the request.
-  form.hideError();
+  form.hideMessage();
   lockUI();
 
   // Launch the request.
@@ -401,7 +394,7 @@ var waitForResult = function(defer, form) {
     });
   }, function(error) {
     unlockUI(false);
-    form.showError(error);
+    form.showMessage('error', 'Oh snap!', error.error.text || error.text);
     done.reject(error);
   });
 
@@ -429,7 +422,6 @@ exports.onContentLoaded = function() {
   // Setup global UI elements.
   groupChooser = new GroupChooser($('#group-chooser'));
   mainFrame = new ContentFrame($('#main-content-pane'));
-  progressSpinner = new common.ProgressSpinner();
 
   // Called to setup 'Create new group' flow.
   var startNewGroupFlow = function() {
@@ -458,7 +450,7 @@ exports.onContentLoaded = function() {
         groupChooser.setSelection(group.name);
       });
     }
-    mainFrame.loadContent(form, progressSpinner);
+    mainFrame.loadContent(form);
   }
 
   // Wire event handlers.
@@ -470,13 +462,10 @@ exports.onContentLoaded = function() {
   });
 
   // Load and show data.
-  progressSpinner.show();
   groupChooser.refetchGroups().then(function() {
-    progressSpinner.hide();
     groupChooser.selectDefault();
     common.presentContent();
   }, function(error) {
-    progressSpinner.hide();
     common.presentError(error.text);
   });
 

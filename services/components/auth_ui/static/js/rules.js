@@ -2,6 +2,10 @@ var rules = (function() {
 var exports = {};
 
 
+////////////////////////////////////////////////////////////////////////////////
+// Utilities.
+
+
 // Kinds of ACL rules allowed.
 var allowedRuleKinds = {
   ALLOW: true,
@@ -19,9 +23,10 @@ var allowedRuleActions = {
 
 
 // Regular expression that matches valid group names.
-var allowedGroupRe = /^[0-9a-zA-Z_\-\. ]{3,40}$/;
+var allowedGroupRe = /([0-9a-zA-Z_\-\. ]{3,40})|\*$/;
 
 
+// Ensure |str| is at least |len| chars long.
 var padWithSpaces = function(str, len) {
   var result = str;
   for (var i = str.length; i < len; i++)
@@ -32,31 +37,32 @@ var padWithSpaces = function(str, len) {
 
 // Rule object -> string.
 var ruleToString = function(rule) {
-  var actions = rule.actions.join('-');
-  return String.format('{0} {1} {2} {3}',
-      padWithSpaces(rule.kind, 10),
-      padWithSpaces(rule.group, 20),
-      padWithSpaces(actions, 26),
+  var actions = rule.actions.join(' ');
+  return String.format(
+      '{0} | {1} | {2} | {3}',
+      padWithSpaces(rule.kind, 6),
+      padWithSpaces(rule.group, 24),
+      padWithSpaces(actions, 28),
       rule.resource);
 }
 
 
 // String -> {rule: <Rule object>, error: <Error string>}.
 var stringToRule = function(str) {
-  // Split by whitespace.
-  var terms = _.filter(str.split(/[ \t]+/), function(term) {
-    return !!term;
-  });
-
-  // Ignore empty lines.
-  if (terms.length == 0)
+  // Skip empty lines.
+  if (str.trim() == '')
     return null;
+
+  // Split by '|' char, strip whitespace.
+  var terms = _.map(str.split('|'), function(term) {
+    return term.trim();
+  });
 
   // Expecting 4 terms.
   if (terms.length != 4) {
     return {
-      error: ('Expected format: (ALLOW|DENY) <Group> ' +
-              '<Action>-<Action>-... <Resource Regex>.')
+      error: ('Expected format: (ALLOW|DENY) | <Group> |' +
+              '<Action> <Action> ... | <Resource Regex>.')
     };
   }
 
@@ -70,9 +76,9 @@ var stringToRule = function(str) {
   if (!allowedGroupRe.test(group))
     return {error: String.format('Invalid group name: {0}.', group)};
 
-  // Parse and check actions: <Action>-<Action>... -> list of upper actions.
+  // Parse and check actions: <Action> <Action>... -> list of upper actions.
   var actions = terms[2];
-  actions = _.map(actions.split('-'), function(action) {
+  actions = _.map(actions.split(/[ \t]+/), function(action) {
     return action.toUpperCase();
   });
   for (var i = 0; i < actions.length; i++) {
@@ -95,35 +101,33 @@ var stringToRule = function(str) {
 
 
 ////////////////////////////////////////////////////////////////////////////////
+// List of rules.
 
 
-var RuleList = function($element, progressSpinner) {
+var RuleList = function($element) {
   this.$element = $element;
-  this.progressSpinner = progressSpinner;
   this.lastModified = null;
 
   var self = this;
-  $('#rules-form', $element).submit(function() {
-    return self.onSubmit();
+  $('#rules-form', $element).submit(function(e) {
+    e.preventDefault();
+    self.onSubmit();
   });
 }
 
 
+// Reload rules from the server.
 RuleList.prototype.refetch = function() {
+  var defer = api.rulesRead();
   var self = this;
-  var defer = $.Deferred();
-  var request = api.rulesRead();
-  self.progressSpinner.wrapDeferred(request);
-  api.rulesRead().then(function(response) {
+  defer.then(function(response) {
     self.setRules(response.data.rules, response.headers['Last-Modified']);
-    defer.resolve();
-  }, function(error) {
-    defer.reject(error);
   });
-  return defer.promise();
+  return defer;
 }
 
 
+// Update UI based on rules passed from server.
 RuleList.prototype.setRules = function(rules, lastModified) {
   var asStrings = [];
   _.each(rules, function(rule) {
@@ -135,74 +139,181 @@ RuleList.prototype.setRules = function(rules, lastModified) {
 }
 
 
+// Validate and parse currently set rules.
+// Returns object {rules: <array of rules>, error: {title: ..., message: ...}}.
 RuleList.prototype.getRules = function() {
-  var asStrings = $('textarea[name=rules]', this.$element).val().split('\n');
   var rules = [];
-  for (var i = 0; i < asStrings.length; i++) {
-    var result = stringToRule(asStrings[i]);
+  var error = null;
+  var lineNum = 0;
+  var asStrings = $('textarea[name=rules]', this.$element).val().split('\n');
+  _.every(asStrings, function(ruleStr) {
+    var result = stringToRule(ruleStr);
+    lineNum += 1;
+    // Skip empty lines.
     if (!result)
-      continue;
-    if (result.rule) {
-      rules.push(result.rule);
-    } else {
-      return {
-        error: {
-          title: String.format('Error on line {0}:', i + 1),
-          message: result.error
-        }
+      return true;
+    // Error? Stop iteration.
+    if (!result.rule) {
+      rules = null;
+      error = {
+        title: String.format('Error on line {0}:', lineNum),
+        message: result.error
       };
+      return false;
     }
-  }
-  return {rules: rules};
+    rules.push(result.rule);
+    return true;
+  });
+  return {rules: rules, error: error};
 }
 
 
+// Send rules to server.
 RuleList.prototype.onSubmit = function() {
-  var self = this;
-  var result = this.getRules();
-  if (result.error) {
-    // Local validation error.
-    this.showError(result.error.title, result.error.message);
-  } else {
-    // Local validation passed, try to submit.
-    var request = api.rulesUpdate({rules: result.rules}, self.lastModified);
-    this.hideError();
-    this.hideSuccess();
-    this.progressSpinner.wrapDeferred(request);
-    request.then(function() {
-      self.refetch().done(function() {
-        self.showSuccess('ACL rules updated.');
-      });
-    }, function(error) {
-      self.showError('Error:', error.error.text || error.text);
-    });
+  var parsed = this.getRules();
+  if (parsed.error) {
+    this.showMessage('error', parsed.error.title, parsed.error.message);
+    return;
   }
-  return false;
+
+  // Local validation passed, try to submit.
+  var request = api.rulesUpdate({rules: parsed.rules}, this.lastModified);
+  var self = this;
+  request.then(function() {
+    self.refetch().done(function() {
+      self.showMessage('success', 'Done!', 'ACL rules updated.');
+    });
+  }, function(error) {
+    self.showMessage('error', 'Error:', error.error.text || error.text);
+  });
 }
 
 
-RuleList.prototype.showError = function(titleText, errorText) {
-  this.hideSuccess();
-  $('#error-alert-box #error-title', this.$element).text(titleText);
-  $('#error-alert-box #error-msg', this.$element).text(errorText);
-  $('#error-alert-box', this.$element).removeClass('hidden');
+// Shows error or success message.
+RuleList.prototype.showMessage = function(type, title, message) {
+  $('#alerts', this.$element).html(
+      common.getAlertBoxHtml(type, title, message));
 }
 
 
-RuleList.prototype.hideError = function() {
-  $('#error-alert-box', this.$element).addClass('hidden');
+// Hides error or success message.
+RuleList.prototype.hideMessage = function() {
+  $('#alerts', this.$element).empty();
 }
 
 
-RuleList.prototype.showSuccess = function(text) {
-  this.hideError();
-  $('#success-alert-box #success-msg', this.$element).text(text);
-  $('#success-alert-box', this.$element).removeClass('hidden');
+////////////////////////////////////////////////////////////////////////////////
+// ACL query sandbox.
+
+
+SandboxModal = function($element) {
+  this.$element = $element;
+  this.rules = null;
+
+  var self = this;
+
+  // Run query on form submit.
+  $('form', this.$element).submit(function(e) {
+    e.preventDefault();
+    self.onRunQuery();
+  });
+
+  // Focus first field when form is shown.
+  this.$element.on('shown.bs.modal', function(e) {
+    $('input[name=identity]', self.$element).focus();
+  });
 }
 
 
-RuleList.prototype.hideSuccess = function() {
-  $('#success-alert-box', this.$element).addClass('hidden');
+// Shows sandbox modal dialog.
+SandboxModal.prototype.show = function(rules) {
+  this.rules = rules;
+  this.setQueryResult('');
+  this.setErrorMessage('');
+  this.$element.modal('show');
+}
+
+
+// 'Query' button clicked.
+SandboxModal.prototype.onRunQuery = function() {
+  // Grab query parameters.
+  var identity = $('input[name=identity]', this.$element).val();
+  var action = $('input[name=action]', this.$element).val();
+  var resource = $('input[name=resource]', this.$element).val();
+
+  // Local validation passed, send to server.
+  var request = api.rulesCheck({
+    rules: this.rules,
+    identity: identity,
+    action: action.length ? action.toUpperCase() : null,
+    resource: resource
+  });
+
+  var self = this;
+  request.then(function(response) {
+    self.setErrorMessage('');
+    self.setQueryResult(self.reportToText(response.data));
+  }, function(error) {
+    self.setErrorMessage(error.error.text || error.text);
+    self.setQueryResult('');
+  });
+}
+
+
+SandboxModal.prototype.reportToText = function(report) {
+  var text = [];
+  text.push('Unrecognized groups:');
+  if (report.unrecognizedGroups && report.unrecognizedGroups.length) {
+    _.each(report.unrecognizedGroups, function(name) {
+      text.push(String.format('  "{0}"', name));
+    });
+  } else {
+    text.push('  None');
+  }
+  text.push('');
+  if (report.identityGroups) {
+    text.push(
+        String.format('Identity "{0}" belongs to groups:', report.identity));
+    if (report.identityGroups.length) {
+      _.each(report.identityGroups, function(name) {
+        text.push(String.format('  "{0}"', name));
+      });
+    }  else {
+      text.push('  None');
+    }
+    text.push('');
+  }
+  text.push('Matching rules:');
+  if (report.matchingRules) {
+    _.each(report.matchingRules, function(rule) {
+      text.push('  ' + ruleToString(rule));
+    });
+  } else {
+    text.push('  skipped');
+  }
+  text.push('');
+  return text.join('\n');
+}
+
+
+// Shows or hides result of a query execution.
+SandboxModal.prototype.setQueryResult = function(text) {
+  if (text && text.length) {
+    $('#results-box', this.$element).text(text);
+    $('#results-panel', this.$element).removeClass('hidden');
+  } else {
+    $('#results-box', this.$element).empty();
+    $('#results-panel', this.$element).addClass('hidden');
+  }
+}
+
+
+// Shows or hides error alert.
+SandboxModal.prototype.setErrorMessage = function(text) {
+  if (text)
+    $('#alerts', this.$element).html(common.getAlertBoxHtml('error', '', text));
+  else
+    $('#alerts', this.$element).empty();
 }
 
 
@@ -210,17 +321,23 @@ RuleList.prototype.hideSuccess = function() {
 // Main entry point, sets up all high-level UI logic.
 
 
-var ruleList;
-var progressSpinner;
-
-
 exports.onContentLoaded = function() {
-  progressSpinner = new common.ProgressSpinner();
-  ruleList = new RuleList($('#rule-list'), progressSpinner);
+  var ruleList = new RuleList($('#rule-list'));
+  var sandboxModal = new SandboxModal($('#sandbox-modal'));
+
+  // Open sandbox dialog on button click.
+  $('#rule-list #sandbox-btn').click(function() {
+    var parsed = ruleList.getRules();
+    if (parsed.error) {
+      ruleList.showMessage('error', parsed.error.title, parsed.error.message);
+    } else {
+      ruleList.hideMessage();
+      sandboxModal.show(parsed.rules);
+    }
+  });
 
   // Load and show data.
   var defer = ruleList.refetch();
-  progressSpinner.wrapDeferred(defer);
   defer.then(function() {
     common.presentContent();
   }, function(error) {

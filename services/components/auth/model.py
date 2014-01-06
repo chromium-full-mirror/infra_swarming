@@ -49,8 +49,11 @@ ALLOWED_IDENTITY_KINDS = {
     IDENTITY_USER: re.compile(r'[0-9a-zA-Z_\-\.@]+$'),
 }
 
-# Regular expression that matches group names.
-GROUP_NAME_RE = re.compile(r'[0-9a-zA-Z_\-\. ]{3,40}$')
+# Regular expression that matches group names. No trailing spaces allowed.
+GROUP_NAME_RE = re.compile(
+    r'[0-9a-zA-Z_][0-9a-zA-Z_\-\. ]{2,40}[0-9a-zA-Z_\-\.]$')
+# Special group name that means 'All possible users' (including anonymous).
+GROUP_ALL = '*'
 
 # Global root key of AuthRules entity group.
 ROOT_KEY = ndb.Key('AuthRules', 'default')
@@ -181,7 +184,7 @@ class AccessRule(
     kind = str(kind)
 
     # Validate group name.
-    if not GROUP_NAME_RE.match(group):
+    if not GROUP_NAME_RE.match(group) and group != GROUP_ALL:
       raise ValueError('Invalid group name: %s.' % group)
 
     # Validate action list, convert to str.
@@ -216,37 +219,12 @@ class AccessRule(
       raise ValueError('Invalid format of a rule dict: %r.' % obj)
 
 
-class RuleList(utils.JsonSerializable):
-  """List of AccessRules."""
-
-  def __init__(self, rules=None):
-    self.rules = rules or []
-
-  def to_jsonish(self):
-    return [r.to_jsonish() for r in self.rules]
-
-  @classmethod
-  def from_jsonish(cls, obj):
-    if not obj:
-      return cls()
-    if not isinstance(obj, (list, tuple)):
-      raise ValueError(
-          'Expecting a list of rules, got %r instead.' % obj)
-    return cls([AccessRule.from_jsonish(r) for r in obj])
-
-  def get_matching_rules(self, action, resource):
-    """Generator that yields rules that match |action| and |resource|."""
-    for rule in self.rules:
-      if action in rule.actions and rule.resource.match(resource):
-        yield rule
-
-
-class RuleListProperty(utils.JsonSerializableProperty):
-  """NDB model property for RuleList values.
+class AccessRuleProperty(utils.JsonSerializableProperty):
+  """NDB model property for AccessRule values.
 
   Stored as JSON blob internally.
   """
-  _value_type = RuleList
+  _value_type = AccessRule
   _indexed = False
 
 
@@ -256,7 +234,7 @@ class RuleListProperty(utils.JsonSerializableProperty):
 class AuthRules(utils.SerializableModel):
   """Singleton entity that holds all ACL rules.
 
-  Acts as entity root for AuthGroup model.
+  Acts as entity root for all other models.
   """
 
   @classmethod
@@ -267,8 +245,8 @@ class AuthRules(utils.SerializableModel):
       'modified_by': utils.READ_ONLY,
     }
 
-  # All ACL rules stored as JSON in DB.
-  rules = RuleListProperty()
+  # All ACL rules.
+  rules = AccessRuleProperty(repeated=True)
 
   # When rules were modified last time, used in conditional requests.
   modified_ts = ndb.DateTimeProperty(auto_now=True, indexed=False)
@@ -323,33 +301,65 @@ class AuthDB(object):
   """Represents an entire read-only database of ACL Rules and User Groups."""
 
   def __init__(self, rules=None, groups=None, entity_group_version=None):
-    self.rules = rules or RuleList()
-    self.groups = dict((g.name, g) for g in groups) if groups else {}
+    self.rules = rules or AuthRules()
+    self.groups = dict((g.key.string_id(), g) for g in groups) if groups else {}
     self.entity_group_version = entity_group_version
 
+  def get_groups(self, identity=None):
+    """Return set of group names that contain |identity| as a member."""
+    if not identity:
+      return set(self.groups)
+    return set(g for g in self.groups if self.is_group_member(identity, g))
+
   def is_group_member(self, identity, group):
-    """Return True if |identity| belongs to group |group| (given as str)."""
+    """Return True if |identity| belongs to group |group|."""
+    if group == GROUP_ALL:
+      return True
     group_obj = self.groups.get(group)
     if not group_obj:
       return False
-    for glob in group.globs:
+    for glob in group_obj.globs:
       if glob.match(identity):
         return True
-    for member in group.members:
+    for member in group_obj.members:
       if identity == member:
         return True
     # TODO(vadimsh): If group nesting graph has cycles, this can stuck.
-    for nested in group.nested:
+    for nested in group_obj.nested:
       if self.is_group_member(identity, nested):
         return True
     return False
 
+  def get_rules(self):
+    """Return all rules."""
+    return self.rules.rules or []
+
+  def get_matching_rules(self, identity=None, action=None, resource=None):
+    """Return list of AccessRules that match given query."""
+    rules = []
+    for rule in self.rules.rules:
+      print rule
+      if action and action not in rule.actions:
+        continue
+      if resource and not rule.resource.match(resource):
+        continue
+      if identity and not self.is_group_member(identity, rule.group):
+        continue
+      # First matched rule terminates ACL evaluation, so if complete triple is
+      # given, do not even show all other rules.
+      if action and resource and identity:
+        return [rule]
+      rules.append(rule)
+    # No rules match -> apply default 'deny all' rule.
+    return rules or [AccessRule(DENY_RULE, GROUP_ALL, ALLOWED_ACTIONS, '.*$')]
+
   def check_identity_has_permission(self, identity, action, resource):
     """True if |identity| can execute |action| against |resource|."""
-    if action not in ALLOWED_ACTIONS:
-      return False
-    for rule in self.rules.get_matching_rules(action, resource):
-      if self.is_group_member(identity, rule.group):
+    assert action in ALLOWED_ACTIONS
+    for rule in self.rules.rules:
+      if (action in rule.actions and
+          rule.resource.match(resource) and
+          self.is_group_member(identity, rule.group)):
         return rule.kind == ALLOW_RULE
     return False
 
@@ -382,4 +392,4 @@ def fetch_auth_db(root_key=ROOT_KEY, known_version=None):
   if rules_entity is None:
     return AuthDB()
   else:
-    return AuthDB(rules_entity.rules, groups, current_version)
+    return AuthDB(rules_entity, groups, current_version)
