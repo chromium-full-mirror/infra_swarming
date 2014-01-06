@@ -5,6 +5,7 @@
 """Integration with webapp2."""
 
 import json
+import logging
 import os
 import webapp2
 
@@ -28,7 +29,7 @@ EMAIL_SCOPE = 'https://www.googleapis.com/auth/userinfo.email'
 # Request header a client can use for XSRF token.
 XSRF_TOKEN_HEADER = 'X-XSRF-Token'
 # GET or POST parameters a client can use for XSRF token.
-XSRF_TOKEN_REQUEST_PARAM = 'token'
+XSRF_TOKEN_REQUEST_PARAM = 'xsrf_token'
 
 
 class XSRFToken(tokens.Token):
@@ -76,6 +77,7 @@ class AuthenticatingHandler(webapp2.RequestHandler):
           assert is_admin in (True, False)
           break
         except api.AuthenticationError as err:
+          logging.error('Authentication error.\n%s', err)
           self.authentication_error(err)
           return
 
@@ -92,6 +94,7 @@ class AuthenticatingHandler(webapp2.RequestHandler):
       # manually or via 'required' decorator.
       return super(AuthenticatingHandler, self).dispatch()
     except api.AuthorizationError as err:
+      logging.error('Authorization error.\n%s', err)
       self.authorization_error(err)
 
   def generate_xsrf_token(self):
@@ -109,6 +112,8 @@ class AuthenticatingHandler(webapp2.RequestHandler):
     if token is None:
       raise api.AuthorizationError('XSRF token is missing')
     try:
+      if isinstance(token, unicode):
+        token = token.encode('ascii')
       XSRFToken.validate(token, [api.get_current_identity().to_bytes()])
     except tokens.InvalidTokenError as err:
       raise api.AuthorizationError(str(err))
@@ -224,7 +229,8 @@ def bootstrap(authenticators=None):
   if authenticators is not None:
     assert all(issubclass(cls, AuthenticationMethod) for cls in authenticators)
     _authenticators = list(authenticators)
-
+  # Set up all necessary root entities.
+  model.bootstrap()
   # Set up all initial secrets.
   model.AuthSecret.bootstrap(
       author=None,

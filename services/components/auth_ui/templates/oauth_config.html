@@ -1,0 +1,45 @@
+{% extends 'base.html' %}
+{% block content %}
+
+
+<div class="row">
+  <div class="col-md-12">
+    <div class="panel panel-default" id="rule-list">
+      <div class="panel-heading"><h3 class="panel-title">OAuth config</h3></div>
+      <div class="panel-body">
+        <form class="form" role="form" method="POST">
+          <input type="hidden" name="xsrf_token" value="{{xsrf_token}}">
+          <div class="form-group">
+            <label class="control-label">Primary client_id</label>
+            <div style="font-family:monospace;">
+              <input type="text" class="form-control"
+                     name="client_id" value="{{client_id}}"
+                     placeholder="Not set">
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="control-label">Client secret</label>
+            <div style="font-family:monospace;">
+              <input type="password" class="form-control" autocomplete="off"
+                     name="client_secret" value="***************">
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="control-label">Additional client_id's</label>
+            <div style="font-family:monospace;">
+              <textarea class="form-control"
+                        rows="5" name="additional_client_ids"
+                        wrap="off">{{additional_client_ids}}</textarea>
+            </div>
+          </div>
+          <div class="form-group">
+            <button type="submit" class="btn btn-primary">Submit</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+{% endblock content %}

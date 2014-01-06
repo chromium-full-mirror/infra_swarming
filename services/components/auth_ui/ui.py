@@ -14,8 +14,11 @@ import os
 import webapp2
 
 from google.appengine.api import users
+from google.appengine.ext import ndb
 
 from components import auth
+from components.auth import model
+from components.auth import utils
 
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -29,6 +32,7 @@ JINJA = jinja2.Environment(
 NAVBAR_SECTIONS = (
     ('rules', 'Rules', '/auth/rules', 'auth/management/ui'),
     ('groups', 'Groups', '/auth/groups', 'auth/management/ui'),
+    ('oauth_config', 'OAuth', '/auth/oauth_config', 'auth/management/ui'),
 )
 
 
@@ -51,8 +55,11 @@ class UIHandler(auth.AuthenticatingHandler):
   navbar_tab_id = None
   page_title = None
 
-  def reply(self, path, env=None, status=200):
+  def reply(self, path=None, env=None, status=200):
     """Render template |path| to response using given environment."""
+    path = path or self.template_file
+    assert path
+
     # This goes to both jinja2 env and javascript config.
     common = {
       'login_url': users.create_login_url(self.request.path),
@@ -102,8 +109,7 @@ class UIHandler(auth.AuthenticatingHandler):
 
   @auth.require(auth.READ, 'auth/management/ui')
   def get(self):
-    assert self.template_file
-    self.reply(self.template_file)
+    self.reply()
 
 
 class MainHandler(UIHandler):
@@ -129,10 +135,66 @@ class GroupsHandler(UIHandler):
   page_title = 'ACL Groups'
 
 
+class OAuthConfigHandler(UIHandler):
+  """Renders HTML page with OAuth configuration."""
+  template_file = 'oauth_config.html'
+  navbar_tab_id = 'oauth_config'
+  page_title = 'OAuth Config'
+
+  @auth.require(auth.READ, 'auth/management/oauth')
+  def get(self):
+    oauth_client_id = None
+    additional_oauth_client_ids = None
+
+    # Read OAuth config from model.
+    service_config = model.AuthServiceConfig.get_by_id(
+        'default', parent=model.ROOT_KEY)
+    oauth_client_id = service_config.oauth_client_id
+    global_config = model.ROOT_KEY.get()
+    additional_oauth_client_ids = global_config.oauth_client_ids
+
+    env = {
+      'client_id': oauth_client_id or '',
+      'additional_client_ids': '\n'.join(additional_oauth_client_ids or []),
+    }
+    self.reply(env=env)
+
+  @auth.require(auth.UPDATE, 'auth/management/oauth')
+  def post(self):
+    # Extract data from the form.
+    client_id = self.request.get('client_id')
+    client_secret = self.request.get('client_secret')
+    if '*' in client_secret:
+      client_secret = None
+    additional_client_ids = [
+      x.strip() for x in self.request.get('additional_client_ids').split('\n')
+      if x.strip()
+    ]
+
+    # Store.
+    @ndb.transactional
+    def update():
+      # AuthServiceConfig first.
+      service_config = model.AuthServiceConfig.get_by_id(
+          'default', parent=model.ROOT_KEY)
+      service_config.oauth_client_id = client_id
+      if client_secret:
+        service_config.oauth_client_secret = client_secret
+      service_config.put()
+      # AuthGlobalConfig next.
+      global_config = model.ROOT_KEY.get()
+      global_config.oauth_client_ids = additional_client_ids
+      global_config.put()
+
+    update()
+    self.redirect(self.request.uri)
+
+
 def get_routes():
   """Return a list of webapp2 routes to add to WSGI application."""
   return [
     webapp2.Route(r'/auth', MainHandler),
     webapp2.Route(r'/auth/rules', RulesHandler),
     webapp2.Route(r'/auth/groups', GroupsHandler),
+    webapp2.Route(r'/auth/oauth_config', OAuthConfigHandler),
   ]

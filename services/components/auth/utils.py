@@ -194,7 +194,7 @@ class BytesSerializableProperty(ndb.BlobProperty):
   def _validate(self, value):
     if not isinstance(value, self._value_type):
       raise TypeError(
-          'Expecting %s, got %s' % (self._value_type.__name__, repr(value)))
+          'Expecting %s, got %r' % (self._value_type.__name__, value))
 
   def _to_base_type(self, value):
     result = value.to_bytes()
@@ -244,7 +244,7 @@ class JsonSerializableProperty(ndb.JsonProperty):
   def _validate(self, value):
     if not isinstance(value, self._value_type):
       raise TypeError(
-          'Expecting %s, got %s' % (self._value_type.__name__, repr(value)))
+          'Expecting %s, got %r' % (self._value_type.__name__, value))
 
   def _to_base_type(self, value):
     return value.to_jsonish()

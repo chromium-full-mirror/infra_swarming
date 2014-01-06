@@ -523,3 +523,12 @@ def fetch_auth_db(service='default', known_version=None):
       groups=groups.get_result(),
       secrets=secrets.get_result(),
       entity_group_version=current_version)
+
+
+def bootstrap():
+  """Creates root entities if they don't exist yet."""
+  futures = [
+    AuthGlobalConfig.get_or_insert_async(ROOT_KEY.string_id()),
+    AuthServiceConfig.get_or_insert_async('default', parent=ROOT_KEY)
+  ]
+  ndb.Future.wait_all(futures)
