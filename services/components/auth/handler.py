@@ -63,9 +63,6 @@ class AuthenticatingHandler(webapp2.RequestHandler):
 
   def dispatch(self):
     """Extracts and verifies Identity."""
-    # Perform some initial checks before doing anything more involved.
-    self.validate_request_format()
-
     # Extract Identity, check credentials.
     identity = model.Anonymous
     is_admin = False
@@ -99,7 +96,7 @@ class AuthenticatingHandler(webapp2.RequestHandler):
 
   def generate_xsrf_token(self):
     """Returns new XSRF token."""
-    return XSRFToken.generate([api.get_current_identity().to_bytes()])
+    return XSRFToken.generate(api.get_current_identity().to_bytes())
 
   def verify_xsrf_token(self):
     """Ensures XSRF token is correct.
@@ -114,15 +111,9 @@ class AuthenticatingHandler(webapp2.RequestHandler):
     try:
       if isinstance(token, unicode):
         token = token.encode('ascii')
-      XSRFToken.validate(token, [api.get_current_identity().to_bytes()])
+      XSRFToken.validate(token, api.get_current_identity().to_bytes())
     except tokens.InvalidTokenError as err:
       raise api.AuthorizationError(str(err))
-
-  def validate_request_format(self):
-    """Ensures request has all required headers, etc.
-
-    Called before authentication.
-    """
 
   def authentication_error(self, error):
     """Called when authentication fails.
@@ -206,7 +197,7 @@ class OAuthAuthentication(AuthenticationMethod):
 
   @classmethod
   def authenticate(self, request):
-    auth_db = api.get_request_local_auth_db()
+    auth_db = api.get_request_auth_db()
     client_id = oauth.get_client_id(EMAIL_SCOPE)
     if not auth_db.is_allowed_oauth_client_id(client_id):
       raise api.AuthenticationError('Invalid OAuth client_id: %s' % client_id)

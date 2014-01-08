@@ -99,7 +99,7 @@ GroupChooser.prototype.getSelection = function() {
 
 // Highlights group as chosen in group UI list.
 // If |name| is null, then highlights 'Create new group' button.
-// Triggers 'onSelectionChanged' event.
+// Triggers 'selectionChanged' event.
 GroupChooser.prototype.setSelection = function(name) {
   // Nothing to do?
   if (this.getSelection() === name)
@@ -141,13 +141,21 @@ GroupChooser.prototype.setInteractionDisabled = function(disabled) {
 
 
 ////////////////////////////////////////////////////////////////////////////////
-// Main content frame (with loading indicator).
+// Main content frame.
 
 
 var ContentFrame = function($element) {
   this.$element = $element;
   this.content = null;
   this.loading = null;
+}
+
+
+// Registers new event listener.
+ContentFrame.prototype.onContentShown = function(listener) {
+  this.$element.on('contentShown', function() {
+    listener();
+  });
 }
 
 
@@ -159,9 +167,11 @@ ContentFrame.prototype.setContent = function(content) {
   }
   this.$element.empty();
   this.content = content;
-  if (this.content)
-    this.content.show(this.$element);
   this.loading = null;
+  if (this.content) {
+    this.content.show(this.$element);
+    this.$element.triggerHandler('contentShown');
+  }
 }
 
 
@@ -362,13 +372,11 @@ var mainFrame;
 
 // Blocks UI until request completes.
 var waitForResult = function(defer, form) {
-
   // Helper functions that locks\unlocks UI.
   var lockUI = function() {
     form.setInteractionDisabled(true);
     groupChooser.setInteractionDisabled(true);
   }
-
   var unlockUI = function() {
     form.setInteractionDisabled(false);
     groupChooser.setInteractionDisabled(false);
@@ -403,7 +411,6 @@ var waitForResult = function(defer, form) {
 
 
 exports.onContentLoaded = function() {
-  // Add validator for a group name.
   var groupRe = /^[0-9a-zA-Z_\-\. ]{3,40}$/;
   var memberRe = /^(user|bot|service|anonymous)\:[\w\-\+\%\.\@]+$/;
   var globRe = /^(user|bot|service|anonymous)\:[\w\-\+\%\.\@\*]+$/;
@@ -461,10 +468,12 @@ exports.onContentLoaded = function() {
       startEditGroupFlow(selection);
   });
 
+  // Present UI only when it's fully loaded.
+  mainFrame.onContentShown(common.presentContent);
+
   // Load and show data.
   groupChooser.refetchGroups().then(function() {
     groupChooser.selectDefault();
-    common.presentContent();
   }, function(error) {
     common.presentError(error.text);
   });

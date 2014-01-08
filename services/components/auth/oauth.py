@@ -148,7 +148,7 @@ def get_user_email(access_token):
 
 def create_flow():
   """Returns OAuth2WebServerFlow or None if OAuth is not configured."""
-  auth_db = api.get_request_local_auth_db()
+  auth_db = api.get_request_auth_db()
   client_id, client_secret, callback_uri = auth_db.get_oauth_config()
   if not client_id or not client_secret or not callback_uri:
     return None

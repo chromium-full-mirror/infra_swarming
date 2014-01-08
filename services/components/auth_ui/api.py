@@ -38,14 +38,6 @@ class ApiHandler(auth.AuthenticatingHandler):
   # Content type of requests and responses.
   content_type = 'application/json; charset=UTF-8'
 
-  def validate_request_format(self):
-    """Ensures body has JSON content type."""
-    if self.request.body:
-      content_type = self.request.headers.get('Content-Type')
-      if content_type != self.content_type:
-        msg = 'Expecting JSON body with content type \'%s\'' % self.content_type
-        self.abort_with_error(400, text=msg)
-
   def authentication_error(self, error):
     self.abort_with_error(401, text=str(error))
 
@@ -66,6 +58,10 @@ class ApiHandler(auth.AuthenticatingHandler):
 
   def parse_body(self):
     """Parse body json and verifies it\'s a dict that has given keys."""
+    content_type = self.request.headers.get('Content-Type')
+    if content_type != self.content_type:
+      msg = 'Expecting JSON body with content type \'%s\'' % self.content_type
+      self.abort_with_error(400, text=msg)
     try:
       body = json.loads(self.request.body)
       if not isinstance(body, dict):

@@ -135,10 +135,9 @@ class GroupsHandler(UIHandler):
   page_title = 'ACL Groups'
 
   @auth.require(auth.READ, 'auth/management/ui')
-  @auth.require(auth.READ, 'auth/management/groups/')
+  @auth.require(auth.READ, 'auth/management/groups')
   def get(self):
     self.reply('groups.html')
-
 
 
 class OAuthConfigHandler(UIHandler):

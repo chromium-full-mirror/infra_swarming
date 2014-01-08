@@ -259,7 +259,7 @@ def get_cached_auth_db():
     return _auth_db
 
 
-def get_request_local_auth_db():
+def get_request_auth_db():
   """Returns instance of AuthDB from request local cache.
 
   In a context of a single request this function always returns same
@@ -279,7 +279,7 @@ def get_current_identity():
 
 def check_identity_has_permission(identity, action, resource):
   """True if |identity| can execute |action| against |resource|."""
-  return get_request_local_auth_db().check_identity_has_permission(
+  return get_request_auth_db().check_identity_has_permission(
       identity, action, resource)
 
 
@@ -305,5 +305,4 @@ def get_secret(secret_key):
 
   Returns None if no such key.
   """
-  return get_request_local_auth_db().get_secret(
-      secret_key.name, secret_key.scope)
+  return get_request_auth_db().get_secret(secret_key.name, secret_key.scope)

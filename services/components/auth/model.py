@@ -429,7 +429,6 @@ class AuthDB(object):
     if self.global_config.oauth_client_ids:
       self.allowed_oauth_client_ids.update(self.global_config.oauth_client_ids)
 
-
   def get_groups(self, identity=None):
     """Return set of group names that contain |identity| as a member."""
     if not identity:
@@ -447,7 +446,7 @@ class AuthDB(object):
     if not group_obj:
       return False
 
-    # Use _seen to avoid infinite recursion of group nesting graph has cycles.
+    # Use _seen to avoid infinite recursion if group nesting graph has cycles.
     _seen = _seen or set()
     if group in _seen:
       return False

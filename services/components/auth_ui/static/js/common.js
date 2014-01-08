@@ -74,7 +74,7 @@ exports.utcTimestampToString = function(utc) {
 }
 
 
-// Renders confirmation dialog. Returns deferred.
+// Shows confirmation modal dialog. Returns deferred.
 exports.confirm = function(message) {
   var defer = $.Deferred();
   if (window.confirm(message))
@@ -131,7 +131,6 @@ exports.onContentLoaded = function() {
       }
     }
   });
-
 
   // Install 'Ajax is running' indicator.
   var progressSpinner = new ProgressSpinner();

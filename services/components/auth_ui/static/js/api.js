@@ -95,16 +95,13 @@ exports.setXSRFToken = function(token) {
 
 // Refetches XSRF token from server.
 exports.updateXSRFToken = function() {
-  var defer = $.Deferred();
   var endpoint = '/auth/api/v1/accounts/xsrf_token';
   var headers = {'X-XSRF-Token-Request': '1'};
-  call('POST', endpoint, null, headers).then(function(response) {
+  var request = call('POST', endpoint, null, headers);
+  request.then(function(response) {
     exports.setXSRFToken(response.data.xsrf_token);
-    defer.resolve(response);
-  }, function(error) {
-    defer.reject(error);
   });
-  return defer.promise();
+  return request;
 }
 
 
