@@ -30,9 +30,9 @@ JINJA = jinja2.Environment(
 
 # Top navigation bar links as tuple (id, title, url, auth resource).
 NAVBAR_SECTIONS = (
-    ('rules', 'Rules', '/auth/rules', 'auth/management/ui'),
-    ('groups', 'Groups', '/auth/groups', 'auth/management/ui'),
-    ('oauth_config', 'OAuth', '/auth/oauth-config', 'auth/management/ui'),
+    ('rules', 'Rules', '/auth/rules', 'auth/management/rules'),
+    ('groups', 'Groups', '/auth/groups', 'auth/management/groups'),
+    ('oauth_config', 'OAuth', '/auth/oauth-config', 'auth/management/oauth'),
 )
 
 
@@ -49,17 +49,13 @@ ui_config = UIConfig()
 class UIHandler(auth.AuthenticatingHandler):
   """Renders HTML pages that extend base.html template."""
 
-  template_file = None
   css_file = None
   js_file = None
   navbar_tab_id = None
   page_title = None
 
-  def reply(self, path=None, env=None, status=200):
+  def reply(self, path, env=None, status=200):
     """Render template |path| to response using given environment."""
-    path = path or self.template_file
-    assert path
-
     # This goes to both jinja2 env and javascript config.
     common = {
       'login_url': users.create_login_url(self.request.path),
@@ -111,10 +107,6 @@ class UIHandler(auth.AuthenticatingHandler):
       }
       self.reply('access_denied.html', env=env, status=403)
 
-  @auth.require(auth.READ, 'auth/management/ui')
-  def get(self):
-    self.reply()
-
 
 class MainHandler(UIHandler):
   """Blindly redirects to /auth/rules (that is default ACL UI tab)."""
@@ -125,26 +117,36 @@ class MainHandler(UIHandler):
 
 class RulesHandler(UIHandler):
   """Renders HTML page with ACLs management UI."""
-  template_file = 'rules.html'
   js_file = 'rules.js'
   navbar_tab_id = 'rules'
   page_title = 'ACL Rules'
 
+  @auth.require(auth.READ, 'auth/management/ui')
+  @auth.require(auth.READ, 'auth/management/rules')
+  def get(self):
+    self.reply('rules.html')
+
+
 
 class GroupsHandler(UIHandler):
   """Renders HTML page with Group listing."""
-  template_file = 'groups.html'
   js_file = 'groups.js'
   navbar_tab_id = 'groups'
   page_title = 'ACL Groups'
 
+  @auth.require(auth.READ, 'auth/management/ui')
+  @auth.require(auth.READ, 'auth/management/groups/')
+  def get(self):
+    self.reply('groups.html')
+
+
 
 class OAuthConfigHandler(UIHandler):
   """Renders HTML page with OAuth configuration."""
-  template_file = 'oauth_config.html'
   navbar_tab_id = 'oauth_config'
   page_title = 'OAuth Config'
 
+  @auth.require(auth.READ, 'auth/management/ui')
   @auth.require(auth.READ, 'auth/management/oauth')
   def get(self):
     oauth_client_id = None
@@ -163,8 +165,9 @@ class OAuthConfigHandler(UIHandler):
       'callback_uri': oauth_callback_uri or '',
       'additional_client_ids': '\n'.join(additional_oauth_client_ids or []),
     }
-    self.reply(env=env)
+    self.reply('oauth_config.html', env=env)
 
+  @auth.require(auth.UPDATE, 'auth/management/ui')
   @auth.require(auth.UPDATE, 'auth/management/oauth')
   def post(self):
     # Extract data from the form.

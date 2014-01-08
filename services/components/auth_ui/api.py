@@ -143,7 +143,7 @@ class XSRFHandler(ApiHandler):
 class GroupsHandler(ApiHandler):
   """Group listing."""
 
-  @auth.require(auth.READ, 'auth/management/groups')
+  @auth.require(auth.READ, 'auth/management/groups/')
   def get(self):
     groups = model.AuthGroup.query(ancestor=model.ROOT_KEY).fetch()
     self.send_response({
