@@ -42,7 +42,7 @@ var ruleToString = function(rule) {
       '{0} | {1} | {2} | {3}',
       padWithSpaces(rule.kind, 6),
       padWithSpaces(rule.group, 20),
-      padWithSpaces(actions, 24),
+      padWithSpaces(actions, 26),
       rule.resource);
 }
 

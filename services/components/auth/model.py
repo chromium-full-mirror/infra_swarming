@@ -13,6 +13,8 @@ import re
 from google.appengine.ext import ndb
 from google.appengine.ext.ndb import metadata
 
+from oauth2client import appengine as oauth2client_models
+
 from . import utils
 
 __all__ = [
@@ -104,6 +106,11 @@ class Identity(
   def is_anonymous(self):
     """True if this object represents anonymous identity."""
     return self.kind == IDENTITY_ANONYMOUS
+
+  @property
+  def is_user(self):
+    """True if this object represents user account."""
+    return self.kind == IDENTITY_USER
 
 
 # Predefined Anonymous identity. While not strictly a singleton, it's still can
@@ -263,6 +270,8 @@ class AuthServiceConfig(utils.SerializableModel):
   oauth_client_id = ndb.StringProperty(indexed=False)
   # OAuth2 client secret required to mint access_tokens.
   oauth_client_secret = ndb.StringProperty(indexed=False)
+  # OAuth2 callback_uri, should match the one in API Console config.
+  oauth_callback_uri = ndb.StringProperty(indexed=False)
 
   # When rules were modified last time, used in conditional requests.
   modified_ts = ndb.DateTimeProperty(auto_now=True, indexed=False)
@@ -383,6 +392,16 @@ class AuthSecret(utils.SerializableModel):
     return create()
 
 
+class AuthAccountOAuth2(ndb.Model):
+  """Stores per-identity OAuth credentials.
+
+  Parent entity - none.
+  Key name - serialized identity.
+  """
+  # Long term OAuth credentials (refresh token, etc).
+  oauth_credentials = oauth2client_models.CredentialsNDBProperty()
+
+
 ################################################################################
 
 
@@ -491,6 +510,14 @@ class AuthDB(object):
     """True if given client_id is known."""
     return client_id and client_id in self.allowed_oauth_client_ids
 
+  def get_oauth_config(self):
+    """Returns tuple (client_id, client_secret, callback_uri)."""
+    if not self.service_config:
+      return None, None
+    return (
+        self.service_config.oauth_client_id,
+        self.service_config.oauth_client_secret,
+        self.service_config.oauth_callback_uri)
 
 
 def fetch_auth_db(service='default', known_version=None):

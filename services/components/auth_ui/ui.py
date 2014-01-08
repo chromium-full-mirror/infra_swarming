@@ -32,7 +32,7 @@ JINJA = jinja2.Environment(
 NAVBAR_SECTIONS = (
     ('rules', 'Rules', '/auth/rules', 'auth/management/ui'),
     ('groups', 'Groups', '/auth/groups', 'auth/management/ui'),
-    ('oauth_config', 'OAuth', '/auth/oauth_config', 'auth/management/ui'),
+    ('oauth_config', 'OAuth', '/auth/oauth-config', 'auth/management/ui'),
 )
 
 
@@ -105,7 +105,11 @@ class UIHandler(auth.AuthenticatingHandler):
     if auth.get_current_identity().is_anonymous:
       self.redirect(users.create_login_url(self.request.path))
     else:
-      self.reply('access_denied.html', env={'error': error})
+      env = {
+        'page_title': 'Access Denied',
+        'error': error,
+      }
+      self.reply('access_denied.html', env=env, status=403)
 
   @auth.require(auth.READ, 'auth/management/ui')
   def get(self):
@@ -150,11 +154,13 @@ class OAuthConfigHandler(UIHandler):
     service_config = model.AuthServiceConfig.get_by_id(
         'default', parent=model.ROOT_KEY)
     oauth_client_id = service_config.oauth_client_id
+    oauth_callback_uri = service_config.oauth_callback_uri
     global_config = model.ROOT_KEY.get()
     additional_oauth_client_ids = global_config.oauth_client_ids
 
     env = {
       'client_id': oauth_client_id or '',
+      'callback_uri': oauth_callback_uri or '',
       'additional_client_ids': '\n'.join(additional_oauth_client_ids or []),
     }
     self.reply(env=env)
@@ -163,6 +169,7 @@ class OAuthConfigHandler(UIHandler):
   def post(self):
     # Extract data from the form.
     client_id = self.request.get('client_id')
+    callback_uri = self.request.get('callback_uri')
     client_secret = self.request.get('client_secret')
     if '*' in client_secret:
       client_secret = None
@@ -178,6 +185,7 @@ class OAuthConfigHandler(UIHandler):
       service_config = model.AuthServiceConfig.get_by_id(
           'default', parent=model.ROOT_KEY)
       service_config.oauth_client_id = client_id
+      service_config.oauth_callback_uri = callback_uri
       if client_secret:
         service_config.oauth_client_secret = client_secret
       service_config.put()
@@ -190,11 +198,62 @@ class OAuthConfigHandler(UIHandler):
     self.redirect(self.request.uri)
 
 
+class OAuthGetTokenHandler(UIHandler):
+  """Initiates OAuth2 login flow."""
+
+  @auth.public
+  def get(self):
+    try:
+      self.redirect(auth.start_oauth_flow())
+    except auth.OAuthError as err:
+      env = {
+        'page_title': 'OAuth Error',
+        'error': error,
+      }
+      self.reply('oauth_error.html', env=env, status=403)
+
+
+class OAuthCallbackHandler(UIHandler):
+  """Completes OAuth2 login flow."""
+
+  @auth.public
+  def get(self):
+    # OAuth provider returned error?
+    error = self.request.get('error')
+    if error:
+      env = {
+        'page_title': 'OAuth Error',
+        'error': self.request.get('error_description', error),
+      }
+      return self.reply('oauth_error.html', env=env, status=403)
+
+    # Try to exchange authorization code into access_token.
+    try:
+      identity, state, access_token, expiration_ts = auth.finish_oauth_flow(
+          self.request.get('code'), self.request.get('state'))
+    except auth.OAuthError as err:
+      env = {
+        'page_title': 'OAuth Error',
+        'error': str(err),
+      }
+      return self.reply('oauth_error.html', env=env, status=403)
+
+    # Show access token to user.
+    env = {
+      'page_title': 'Token obtained',
+      'identity': identity,
+      'access_token': access_token,
+    }
+    self.reply('oauth_success.html', env=env)
+
+
 def get_routes():
   """Return a list of webapp2 routes to add to WSGI application."""
   return [
     webapp2.Route(r'/auth', MainHandler),
     webapp2.Route(r'/auth/rules', RulesHandler),
     webapp2.Route(r'/auth/groups', GroupsHandler),
-    webapp2.Route(r'/auth/oauth_config', OAuthConfigHandler),
+    webapp2.Route(r'/auth/oauth-config', OAuthConfigHandler),
+    webapp2.Route(r'/auth/oauth-get-token', OAuthGetTokenHandler),
+    webapp2.Route(r'/auth/oauth-callback', OAuthCallbackHandler),
   ]

@@ -215,8 +215,7 @@ class OAuthAuthentication(AuthenticationMethod):
       identity = model.Identity(model.IDENTITY_USER, email)
     except ValueError:
       raise api.AuthenticationError('Invalid email format: %s' % email)
-    return identity, oauth.is_current_user_admin()
-
+    return identity, oauth.is_current_user_admin(EMAIL_SCOPE)
 
 
 # Global list of AuthenticationMethod classes to use for all request.

@@ -75,8 +75,8 @@ class ApiHandler(auth.AuthenticatingHandler):
     return body
 
 
-@route('/auth/api/v1/accounts/me')
-class MeHandler(ApiHandler):
+@route('/auth/api/v1/accounts/self')
+class SelfHandler(ApiHandler):
   """Shows identity of a caller."""
 
   @auth.public
@@ -84,7 +84,48 @@ class MeHandler(ApiHandler):
     self.send_response({'identity': auth.get_current_identity().to_bytes()})
 
 
-@route('/auth/api/v1/xsrf_token')
+@route('/auth/api/v1/accounts/access_token')
+class OAuthAccessToken(ApiHandler):
+  """Refresh current OAuth access_token or redirect to OAuth2 login flow."""
+
+  # Don't need XSRF token for this.
+  enforce_xsrf_token = ()
+
+  @auth.public
+  def post(self):
+    identity = auth.get_current_identity()
+
+    # Not logged in at all -> redirect to login.
+    if identity.is_anonymous:
+      return self.send_response({
+          'error': 'Not logged in',
+          'login_url': auth.start_oauth_flow(),
+        },
+        http_code=401)
+
+    # Bots or services can't use OAuth.
+    if not identity.is_user:
+      raise auth.AuthorizationError('Only users can use OAuth flow')
+
+    # Try to refresh the token. Fails with OAuthError if refresh token expired.
+    try:
+      access_token, expiration_ts = auth.refresh_oauth_access_token(identity)
+    except auth.OAuthError as err:
+      return self.send_response({
+          'error': str(err),
+          'login_url': auth.start_oauth_flow()
+        },
+        http_code=403)
+
+    # New token obtained.
+    return self.send_response({
+      'identity': identity.to_bytes(),
+      'access_token': access_token,
+      'expiration_ts': expiration_ts,
+    })
+
+
+@route('/auth/api/v1/accounts/xsrf_token')
 class XSRFHandler(ApiHandler):
   """Generates XSRF token on demand."""
 

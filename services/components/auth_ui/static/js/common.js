@@ -69,16 +69,8 @@ exports.getAlertBoxHtml = function(type, title, message) {
 
 
 // Converts UTC timestamp (in milliseconds) to a readable string in local TZ.
-// Based on http://stackoverflow.com/a/7412756
 exports.utcTimestampToString = function(utc) {
-  // Create a local date from the UTC.
-  var t = new Date(Number(utc));
-  // Subtract from the UTC time to get local.
-  t.setTime(t.getTime() - t.getTimezoneOffset() * 60000);
-  // Convert to string.
-  var str = [t.getFullYear(), t.getMonth(), t.getDate()].join('/');
-  str += ' ' + t.toLocaleTimeString();
-  return str;
+  return (new Date(Number(utc))).toLocaleString();
 }
 
 

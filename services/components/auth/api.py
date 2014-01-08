@@ -28,7 +28,7 @@ __all__ = [
 SecretKey = collections.namedtuple('SecretKey', ['name', 'scope'])
 
 # How soon process-global AuthDB cache expires.
-PROCESS_CACHE_EXPIRATION_SEC = 60
+PROCESS_CACHE_EXPIRATION_SEC = 10
 
 # State for process-global Authentication DB cache.
 _auth_db_lock = threading.Lock()

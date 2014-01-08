@@ -19,4 +19,4 @@ def configure(app_name, app_version, app_revision_url):
 
 def get_routes():
   """Return a list of webapp2 routes to add to WSGI application."""
-  return ui.get_routes() + api.get_routes()
+  return api.get_routes() + ui.get_routes()
