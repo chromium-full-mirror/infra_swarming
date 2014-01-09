@@ -19,7 +19,7 @@ from . import model
 __all__ = [
   'Error', 'AuthenticationError', 'AuthorizationError',
   'public', 'require', 'get_current_identity', 'has_permission',
-  'ensure_permission', 'get_secret',
+  'ensure_permission', 'get_secret', 'get_request_auth_db',
 ]
 
 

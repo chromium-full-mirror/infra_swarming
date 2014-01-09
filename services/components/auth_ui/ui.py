@@ -127,7 +127,6 @@ class RulesHandler(UIHandler):
     self.reply('rules.html')
 
 
-
 class GroupsHandler(UIHandler):
   """Renders HTML page with Group listing."""
   js_file = 'groups.js'
@@ -155,13 +154,13 @@ class OAuthConfigHandler(UIHandler):
     service_config = model.AuthServiceConfig.get_by_id(
         'default', parent=model.ROOT_KEY)
     oauth_client_id = service_config.oauth_client_id
-    oauth_callback_uri = service_config.oauth_callback_uri
+    oauth_client_secret = service_config.oauth_client_secret
     global_config = model.ROOT_KEY.get()
     additional_oauth_client_ids = global_config.oauth_client_ids
 
     env = {
       'client_id': oauth_client_id or '',
-      'callback_uri': oauth_callback_uri or '',
+      'client_secret': oauth_client_secret or '',
       'additional_client_ids': '\n'.join(additional_oauth_client_ids or []),
     }
     self.reply('oauth_config.html', env=env)
@@ -171,10 +170,7 @@ class OAuthConfigHandler(UIHandler):
   def post(self):
     # Extract data from the form.
     client_id = self.request.get('client_id')
-    callback_uri = self.request.get('callback_uri')
     client_secret = self.request.get('client_secret')
-    if '*' in client_secret:
-      client_secret = None
     additional_client_ids = [
       x.strip() for x in self.request.get('additional_client_ids').split('\n')
       if x.strip()
@@ -187,9 +183,7 @@ class OAuthConfigHandler(UIHandler):
       service_config = model.AuthServiceConfig.get_by_id(
           'default', parent=model.ROOT_KEY)
       service_config.oauth_client_id = client_id
-      service_config.oauth_callback_uri = callback_uri
-      if client_secret:
-        service_config.oauth_client_secret = client_secret
+      service_config.oauth_client_secret = client_secret
       service_config.put()
       # AuthGlobalConfig next.
       global_config = model.ROOT_KEY.get()
@@ -200,55 +194,6 @@ class OAuthConfigHandler(UIHandler):
     self.redirect(self.request.uri)
 
 
-class OAuthGetTokenHandler(UIHandler):
-  """Initiates OAuth2 login flow."""
-
-  @auth.public
-  def get(self):
-    try:
-      self.redirect(auth.start_oauth_flow())
-    except auth.OAuthError as err:
-      env = {
-        'page_title': 'OAuth Error',
-        'error': error,
-      }
-      self.reply('oauth_error.html', env=env, status=403)
-
-
-class OAuthCallbackHandler(UIHandler):
-  """Completes OAuth2 login flow."""
-
-  @auth.public
-  def get(self):
-    # OAuth provider returned error?
-    error = self.request.get('error')
-    if error:
-      env = {
-        'page_title': 'OAuth Error',
-        'error': self.request.get('error_description', error),
-      }
-      return self.reply('oauth_error.html', env=env, status=403)
-
-    # Try to exchange authorization code into access_token.
-    try:
-      identity, state, access_token, expiration_ts = auth.finish_oauth_flow(
-          self.request.get('code'), self.request.get('state'))
-    except auth.OAuthError as err:
-      env = {
-        'page_title': 'OAuth Error',
-        'error': str(err),
-      }
-      return self.reply('oauth_error.html', env=env, status=403)
-
-    # Show access token to user.
-    env = {
-      'page_title': 'Token obtained',
-      'identity': identity,
-      'access_token': access_token,
-    }
-    self.reply('oauth_success.html', env=env)
-
-
 def get_routes():
   """Return a list of webapp2 routes to add to WSGI application."""
   return [
@@ -256,6 +201,4 @@ def get_routes():
     webapp2.Route(r'/auth/rules', RulesHandler),
     webapp2.Route(r'/auth/groups', GroupsHandler),
     webapp2.Route(r'/auth/oauth-config', OAuthConfigHandler),
-    webapp2.Route(r'/auth/oauth-get-token', OAuthGetTokenHandler),
-    webapp2.Route(r'/auth/oauth-callback', OAuthCallbackHandler),
   ]
