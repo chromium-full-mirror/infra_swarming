@@ -47,7 +47,7 @@ IDENTITY_USER = 'user'
 ALLOWED_IDENTITY_KINDS = {
     IDENTITY_ANONYMOUS: re.compile(r'anonymous$'),
     IDENTITY_BOT: re.compile(r'[0-9a-zA-Z_\-\.@]+$'),
-    IDENTITY_SERVICE: re.compile(r'[0-9a-zA-Z_\-\.]+$'),
+    IDENTITY_SERVICE: re.compile(r'[0-9a-zA-Z_\-]+$'),
     IDENTITY_USER: re.compile(r'[0-9a-zA-Z_\-\.@]+$'),
 }
 
@@ -332,11 +332,6 @@ class AuthSecret(utils.SerializableModel):
   """
   # How many historical values to hold.
   retention = ndb.IntegerProperty(default=2, indexed=False)
-  # How long a key lives before it needs to be replaced (seconds).
-  lifetime_sec = ndb.IntegerProperty(default=0, indexed=False)
-
-  # When this secret expires and should be replaced.
-  expiration_ts = ndb.DateTimeProperty(indexed=True)
   # Last |retention| values, most recent first.
   values = ndb.BlobProperty(repeated=True, indexed=False)
 
@@ -357,11 +352,6 @@ class AuthSecret(utils.SerializableModel):
         values = [secret]
     self.values = values
     self.modified_by = author
-    if self.lifetime_sec:
-      lifetime_td = datetime.timedelta(seconds=self.lifetime_sec)
-      self.expiration_ts = datetime.datetime.utcnow() + lifetime_td
-    else:
-      self.expiration_ts = None
 
   @classmethod
   def get_entity_key(cls, name, scope):
@@ -370,7 +360,7 @@ class AuthSecret(utils.SerializableModel):
     return ndb.Key(AuthSecretStore, scope, cls, name, parent=ROOT_KEY)
 
   @classmethod
-  def bootstrap(cls, author, name, scope, retention=2, lifetime_sec=0):
+  def bootstrap(cls, author, name, scope, retention=2):
     """Creates a secret key if it doesn't exist."""
     key = cls.get_entity_key(name, scope)
     entity = key.get()
@@ -381,8 +371,8 @@ class AuthSecret(utils.SerializableModel):
       entity = key.get()
       if entity is not None:
         return entity
-      entity = cls(key=key, retention=retention, lifetime_sec=lifetime_sec)
-      entity.update(os.urandom(512), author)
+      entity = cls(key=key, retention=retention)
+      entity.update(os.urandom(32), author)
       entity.put()
       return entity
     return create()

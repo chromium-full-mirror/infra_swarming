@@ -22,10 +22,6 @@ __all__ = [
 ]
 
 
-# OAuth2 service scope to use for authentication.
-EMAIL_SCOPE = 'https://www.googleapis.com/auth/userinfo.email'
-
-
 # Request header a client can use for XSRF token.
 XSRF_TOKEN_HEADER = 'X-XSRF-Token'
 # GET or POST parameters a client can use for XSRF token.
@@ -183,34 +179,61 @@ class CookieAuthentication(AuthenticationMethod):
 class OAuthAuthentication(AuthenticationMethod):
   """OAuth2 based authentication."""
 
+  # Each request includes 'Authorization' header, no need to XSRF token.
   requires_xsrf_token = False
+  # OAuth2 service scope to use for authentication.
+  oauth_scope = 'https://www.googleapis.com/auth/userinfo.email'
 
   @classmethod
   def is_applicable(cls, request):
-    # api.oauth stub on dev server is not very good.
+    # api.oauth stub on dev server is useless.
     if 'Dev' in os.environ.get('SERVER_SOFTWARE', ''):
       return False
     try:
-      return bool(oauth.get_client_id(EMAIL_SCOPE))
+      return bool(oauth.get_client_id(cls.oauth_scope))
     except oauth.Error:
       return False
 
   @classmethod
   def authenticate(self, request):
     auth_db = api.get_request_auth_db()
-    client_id = oauth.get_client_id(EMAIL_SCOPE)
+    client_id = oauth.get_client_id(cls.oauth_scope)
     if not auth_db.is_allowed_oauth_client_id(client_id):
       raise api.AuthenticationError('Invalid OAuth client_id: %s' % client_id)
-    email = oauth.get_current_user(EMAIL_SCOPE).email()
+    email = oauth.get_current_user(cls.oauth_scope).email()
     try:
       identity = model.Identity(model.IDENTITY_USER, email)
     except ValueError:
       raise api.AuthenticationError('Invalid email format: %s' % email)
-    return identity, oauth.is_current_user_admin(EMAIL_SCOPE)
+    return identity, oauth.is_current_user_admin(cls.oauth_scope)
+
+
+class ServiceToServiceAuthentication(AuthenticationMethod):
+  """Used for AppEngine <-> AppEngine communication.
+
+  Relies on X-Appengine-Inbound-Appid header set by AppEngine itself.
+  """
+
+  @classmethod
+  def is_applicable(cls, request):
+    return bool(request.headers.get('X-Appengine-Inbound-Appid', None))
+
+  @classmethod
+  def authenticate(self, request):
+    app_id = request.headers.get('X-Appengine-Inbound-Appid')
+    try:
+      identity = model.Identity(model.IDENTITY_SERVICE, app_id)
+    except ValueError:
+      raise api.AuthenticationError('Invalid app_id format: %s' % app_id)
+    return identity, False
 
 
 # Global list of AuthenticationMethod classes to use for all request.
-_authenticators = [CookieAuthentication, OAuthAuthentication]
+_authenticators = [
+  ServiceToServiceAuthentication,
+  CookieAuthentication,
+  OAuthAuthentication
+]
 
 
 def bootstrap(authenticators=None):
@@ -225,6 +248,4 @@ def bootstrap(authenticators=None):
   model.AuthSecret.bootstrap(
       author=None,
       name=XSRFToken.secret_key.name,
-      scope=XSRFToken.secret_key.scope,
-      retention=5,
-      lifetime_sec=3600)
+      scope=XSRFToken.secret_key.scope)

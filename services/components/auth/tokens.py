@@ -30,7 +30,24 @@ class BadSecretError(ValueError):
 
 
 class Token(object):
-  """Base class for token types."""
+  """Base class for token types.
+
+  Usage:
+    1) Define token class, configuring its kind, expiration name of a secret:
+      class MyToken(Token):
+        kind = 'my_token'
+        expiration_sec = 3600
+        secret_key = SecretKey('my_secret', scope='local')
+
+    2) Use it to generate a token that embeds and\or signs some data:
+      token = MyToken.generate('message to authenticate', {'data': 'public'})
+
+    3) Validate token passed from elsewhere and extract embedded data:
+      data = MyToken.validate(token, 'message to authenticate')
+      assert data['data'] == 'public'
+
+  Generated token expires after |expiration_sec| or when secret key expires.
+  """
 
   # What algo to use for MAC tag.
   algo = 'hmac-sha256'
