@@ -30,8 +30,9 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(BASE_DIR, 'third_party'))
 
 import acl
-from components.auth_ui import main as auth_ui
+from components import auth
 from components import ereporter2
+from components.auth_ui import main as auth_ui
 import config
 import gcs
 import map_reduce_jobs
@@ -740,11 +741,13 @@ class InternalVerifyWorkerHandler(webapp2.RequestHandler):
     future.wait()
 
 
-class RestrictedAdminUIHandler(acl.ACLRequestHandler):
+class RestrictedAdminUIHandler(auth.AuthenticatingHandler):
   """Root admin UI page."""
+
+  @auth.require(auth.READ, 'isolate/management')
   def get(self):
     self.response.write(render_template('restricted.html', {
-        'token': self.generate_token(),
+        'xsrf_token': self.generate_xsrf_token(),
         'map_reduce_jobs': [
             {'id': job_id, 'name': job_def['name']}
             for job_id, job_def in map_reduce_jobs.MAP_REDUCE_JOBS.iteritems()
@@ -752,17 +755,20 @@ class RestrictedAdminUIHandler(acl.ACLRequestHandler):
     }))
 
 
-class RestrictedGoogleStorageConfig(acl.ACLRequestHandler):
+class RestrictedGoogleStorageConfig(auth.AuthenticatingHandler):
   """View and modify Google Storage config entries."""
+
+  @auth.require(auth.READ, 'isolate/management')
   def get(self):
     settings = config.settings()
     self.response.write(render_template('gs_config.html', {
         'gs_bucket': settings.gs_bucket,
         'gs_client_id_email': settings.gs_client_id_email,
         'gs_private_key': settings.gs_private_key,
-        'token': self.generate_token(),
+        'xsrf_token': self.generate_xsrf_token(),
     }))
 
+  @auth.require(auth.UPDATE, 'isolate/management')
   def post(self):
     settings = config.settings()
     settings.gs_bucket = self.request.get('gs_bucket')
@@ -856,7 +862,7 @@ class RestrictedEreporter2Request(webapp2.RequestHandler):
 ### Mapreduce related handlers
 
 
-class RestrictedLaunchMapReduceJob(acl.ACLRequestHandler):
+class RestrictedLaunchMapReduceJob(auth.AuthenticatingHandler):
   """Enqueues a task to start a map reduce job on the backend module.
 
   A tree of map reduce jobs inherits module and version of a handler that
@@ -864,6 +870,8 @@ class RestrictedLaunchMapReduceJob(acl.ACLRequestHandler):
   map reduce on a backend module one needs to pass a request to a task running
   on backend module.
   """
+
+  @auth.require(auth.UPDATE, 'isolate/management')
   def post(self):
     job_id = self.request.get('job_id')
     assert job_id in map_reduce_jobs.MAP_REDUCE_JOBS
@@ -892,8 +900,11 @@ class InternalLaunchMapReduceJobWorkerHandler(webapp2.RequestHandler):
 ### Non-restricted handlers
 
 
-class ProtocolHandlerMixin(object):
-  """Mixing class for request handlers that implement isolate protocol."""
+class ProtocolHandler(auth.AuthenticatingHandler):
+  """Request handlers that implement isolate protocol."""
+
+  # Isolate protocol uses 'token' instead of default 'xsrf_token'.
+  xsrf_token_request_param = 'token'
 
   def send_json(self, body, http_code=200):
     """Serializes |body| into JSON and sends it as a response."""
@@ -945,11 +956,11 @@ class ProtocolHandlerMixin(object):
 
     Valid only for POST or PUT requests for now.
     """
-    # See HandshakeHandlerGS, its where token_data is generated.
-    return self.token_data.get('v')
+    # See HandshakeHandlerGS, it's where xsrf_token_data is generated.
+    return self.xsrf_token_data.get('v')
 
 
-class HandshakeHandlerGS(acl.ACLRequestHandler, ProtocolHandlerMixin):
+class HandshakeHandlerGS(ProtocolHandler):
   """Returns access token, version and capabilities of the server.
 
   Request body is a JSON dict:
@@ -975,8 +986,9 @@ class HandshakeHandlerGS(acl.ACLRequestHandler, ProtocolHandlerMixin):
   """
 
   # This handler is called to get the token, there's nothing to enforce yet.
-  enforce_token = False
+  xsrf_token_enforce_on = ()
 
+  @auth.require(auth.READ, 'isolate/namespaces/')
   def post(self):
     """Responds with access token and server version."""
     try:
@@ -990,15 +1002,15 @@ class HandshakeHandlerGS(acl.ACLRequestHandler, ProtocolHandlerMixin):
           'Invalid body of /handshake call.\nError: %s.' % exc)
 
     # This access token will be used to validate each subsequent request.
-    access_token = self.generate_token(token_data={'v': client_protocol})
+    access_token = self.generate_xsrf_token({'v': client_protocol})
 
     # Log details of the handshake to the server log.
     logging_info = {
-        'Access Id': self.access_id,
         'Client app version': client_app_version,
         'Client is fetcher': fetcher,
         'Client is pusher': pusher,
         'Client protocol version': client_protocol,
+        'Identity': auth.get_current_identity(),
         'Token': access_token,
     }
     logging.info(
@@ -1013,7 +1025,7 @@ class HandshakeHandlerGS(acl.ACLRequestHandler, ProtocolHandlerMixin):
     })
 
 
-class PreUploadContentHandlerGS(acl.ACLRequestHandler, ProtocolHandlerMixin):
+class PreUploadContentHandlerGS(ProtocolHandler):
   """Checks for entries existence, generates upload URLs.
 
   Request body is a JSON list:
@@ -1189,6 +1201,7 @@ class PreUploadContentHandlerGS(acl.ACLRequestHandler, ProtocolHandlerMixin):
       finalize_url = None
     return upload_url, finalize_url
 
+  @auth.require(auth.UPDATE, 'isolate/namespaces/{namespace}')
   def post(self, namespace):
     """Reads body with items to upload and replies with URLs to upload to."""
     # Parse a body into list of EntryInfo objects.
@@ -1221,7 +1234,7 @@ class PreUploadContentHandlerGS(acl.ACLRequestHandler, ProtocolHandlerMixin):
       self.tag_entries(existing, namespace)
 
 
-class RetrieveContentHandlerGS(acl.ACLRequestHandler, ProtocolHandlerMixin):
+class RetrieveContentHandlerGS(ProtocolHandler):
   """The handlers for retrieving contents by its SHA-1 hash |hash_key|.
 
   Can produce 5 types of responses:
@@ -1232,6 +1245,7 @@ class RetrieveContentHandlerGS(acl.ACLRequestHandler, ProtocolHandlerMixin):
     * HTTP 416: requested byte range can not be satisfied.
   """
 
+  @auth.require(auth.READ, 'isolate/namespaces/{namespace}')
   def get(self, namespace, hash_key):  #pylint: disable=W0221
     # Parse 'Range' header if it's present to extract initial offset.
     # Only support single continuous range from some |offset| to the end.
@@ -1280,7 +1294,7 @@ class RetrieveContentHandlerGS(acl.ACLRequestHandler, ProtocolHandlerMixin):
     stats.log(stats.RETURN, entry.size - offset, 'GS; %s' % entry.filename)
 
 
-class StoreContentHandlerGS(acl.ACLRequestHandler, ProtocolHandlerMixin):
+class StoreContentHandlerGS(ProtocolHandler):
   """Creates ContentEntry Datastore entity for some uploaded file.
 
   Clients usually do not call this handler explicitly. Signed URL to it
@@ -1336,10 +1350,12 @@ class StoreContentHandlerGS(acl.ACLRequestHandler, ProtocolHandlerMixin):
     mac.update(data_to_sign)
     return mac.hexdigest()
 
+  @auth.require(auth.UPDATE, 'isolate/namespaces/{namespace}')
   def post(self, namespace, hash_key):
     """POST is used when finalizing upload to GS."""
     return self.handle(namespace, hash_key)
 
+  @auth.require(auth.UPDATE, 'isolate/namespaces/{namespace}')
   def put(self, namespace, hash_key):
     """PUT is used when uploading directly to datastore via this handler."""
     return self.handle(namespace, hash_key)
