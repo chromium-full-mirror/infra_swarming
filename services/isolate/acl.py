@@ -125,7 +125,7 @@ class WhitelistIPAuthentication(auth.AuthenticationMethod):
     return True
 
   @classmethod
-  def authenticate(self, request):
+  def authenticate(cls, request):
     iptype, ipvalue = parse_ip(request.remote_addr)
     whitelisted = WhitelistedIP.get_by_id(ip_to_str(iptype, ipvalue))
     if not whitelisted:

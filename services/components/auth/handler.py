@@ -167,7 +167,7 @@ class CookieAuthentication(AuthenticationMethod):
     return bool(users.get_current_user())
 
   @classmethod
-  def authenticate(self, request):
+  def authenticate(cls, request):
     email = users.get_current_user().email()
     try:
       identity = model.Identity(model.IDENTITY_USER, email)
@@ -193,7 +193,7 @@ class OAuthAuthentication(AuthenticationMethod):
       return False
 
   @classmethod
-  def authenticate(self, request):
+  def authenticate(cls, request):
     auth_db = api.get_request_auth_db()
     client_id = oauth.get_client_id(cls.oauth_scope)
     if not auth_db.is_allowed_oauth_client_id(client_id):
@@ -217,7 +217,7 @@ class ServiceToServiceAuthentication(AuthenticationMethod):
     return bool(request.headers.get('X-Appengine-Inbound-Appid', None))
 
   @classmethod
-  def authenticate(self, request):
+  def authenticate(cls, request):
     app_id = request.headers.get('X-Appengine-Inbound-Appid')
     try:
       identity = model.Identity(model.IDENTITY_SERVICE, app_id)
