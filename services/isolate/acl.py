@@ -17,6 +17,8 @@ from google.appengine.api import app_identity
 from google.appengine.api import users
 from google.appengine.ext import ndb
 
+from components import auth
+
 import config
 import template
 import utils
@@ -46,16 +48,6 @@ class WhitelistedIP(ndb.Model):
 
   # Is only for maintenance purpose.
   comment = ndb.StringProperty(indexed=False)
-
-
-class WhitelistedDomain(ndb.Model):
-  """Domain from which users can use the isolate server.
-
-  The key is the domain name, like 'example.com'.
-  """
-  # Logs who made the change.
-  timestamp = ndb.DateTimeProperty(auto_now=True)
-  who = ndb.UserProperty(auto_current_user=True)
 
 
 ### Utility
@@ -259,6 +251,29 @@ def validate_token(token, access_id, secret):
   return public_params_dict
 
 
+### Authentication based on IP whitelist.
+
+
+class WhitelistIPAuthentication(auth.AuthenticationMethod):
+  @classmethod
+  def is_applicable(cls, request):
+    return True
+
+  @classmethod
+  def authenticate(self, request):
+    iptype, ipvalue = parse_ip(request.remote_addr)
+    whitelisted = WhitelistedIP.get_by_id(ip_to_str(iptype, ipvalue))
+    if not whitelisted:
+      return auth.Anonymous, False
+    if whitelisted.group:
+      # Any member of of the group can impersonate others. This is to enable
+      # support for slaves behind proxies with multiple IPs.
+      access_id = whitelisted.group
+    else:
+      access_id = ip_to_str(iptype, ipvalue)
+    return auth.Identity(auth.IDENTITY_BOT, access_id), False
+
+
 ### Handlers
 
 
@@ -303,8 +318,7 @@ class ACLRequestHandler(webapp2.RequestHandler):
   def check_user(self, user):
     """Verifies if the user is whitelisted."""
     domain = user.email().partition('@')[2]
-    if (not WhitelistedDomain.get_by_id(domain) and
-        not users.is_current_user_admin()):
+    if not users.is_current_user_admin():
       logging.warning('Disallowing %s, invalid domain' % user.email())
       self.abort(403, detail='Invalid domain, %s' % domain)
     # user_id() is only set with Google accounts, fallback to the email address
@@ -351,26 +365,27 @@ class ACLRequestHandler(webapp2.RequestHandler):
         str(app_id))
 
 
-class RestrictedWhitelistIPHandler(ACLRequestHandler):
+class RestrictedWhitelistIPHandler(auth.AuthenticatingHandler):
   """Whitelists the current IP.
 
   This handler must have login:admin in app.yaml.
   """
+
+  @auth.require(auth.READ, 'isolate/management/ip_whitelist')
   def get(self):
-    # The user must authenticate with a user credential before being able to
-    # whitelist the IP. This is done with login:admin.
     data = {
       'default_comment': '',
       'default_group': '',
       'default_ip': self.request.remote_addr,
       'note': '',
       'now': datetime.datetime.utcnow(),
-      'token': self.generate_token(),
+      'xsrf_token': self.generate_xsrf_token(),
       'whitelistips': WhitelistedIP.query(),
     }
     self.response.out.write(template.get('whitelistip.html').render(data))
     self.response.headers['Content-Type'] = 'text/html'
 
+  @auth.require(auth.UPDATE, 'isolate/management/ip_whitelist')
   def post(self):
     comment = self.request.get('comment')
     group = self.request.get('group')
@@ -408,47 +423,18 @@ class RestrictedWhitelistIPHandler(ACLRequestHandler):
       'default_ip': self.request.get('ip'),
       'note': '<br>'.join(note),
       'now': datetime.datetime.utcnow(),
-      'token': self.generate_token(),
+      'xsrf_token': self.generate_xsrf_token(),
       'whitelistips': WhitelistedIP.query(),
     }
     self.response.out.write(template.get('whitelistip.html').render(data))
     self.response.headers['Content-Type'] = 'text/html'
 
 
-class RestrictedWhitelistDomainHandler(ACLRequestHandler):
-  """Whitelists a domain.
-
-  This handler must have login:admin in app.yaml.
-  """
-  def get(self):
-    # The user must authenticate with a user credential before being able to
-    # whitelist the IP. This is done with login:admin.
-    self.response.out.write(htmlwrap(
-      '<form name="whitelist" method="post">'
-      'Domain: <input type="text" name="domain" /><br />'
-      '<input type="hidden" name="token" value="%s" />'
-      '<input type="submit" value="SUBMIT" />' %
-        self.generate_token()))
-    self.response.headers['Content-Type'] = 'text/html'
-
-  def post(self):
-    domain = self.request.get('domain')
-    if not re.match(r'^[a-z\.\-]+$', domain):
-      self.abort(403, 'Invalid domain format')
-    # Do not use get_or_insert() right away so we know if the entity existed
-    # before.
-    if not WhitelistedDomain.get_by_id(domain):
-      WhitelistedDomain.get_or_insert(domain)
-      self.response.out.write(htmlwrap('Success: %s' % domain))
-    else:
-      self.response.out.write(htmlwrap('Already present: %s' % domain))
-    self.response.headers['Content-Type'] = 'text/html'
 
 
 def bootstrap():
   """Adds example.com as a valid domain when testing."""
   if os.environ['SERVER_SOFTWARE'].startswith('Development'):
-    WhitelistedDomain.get_or_insert('example.com')
     WhitelistedIP.get_or_insert(
         ip_to_str('v4', 2130706433),
         ip='127.0.0.1',

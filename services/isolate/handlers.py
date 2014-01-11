@@ -1588,8 +1588,6 @@ def CreateApplication():
       webapp2.Route(
           r'/restricted/whitelistip', acl.RestrictedWhitelistIPHandler),
       webapp2.Route(
-          r'/restricted/whitelistdomain', acl.RestrictedWhitelistDomainHandler),
-      webapp2.Route(
           r'/restricted/gs_config', RestrictedGoogleStorageConfig),
 
       # Mapreduce related urls.

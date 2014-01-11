@@ -106,6 +106,16 @@ class Identity(
     return self.kind == IDENTITY_ANONYMOUS
 
   @property
+  def is_bot(self):
+    """True if this object represents bot account."""
+    return self.kind == IDENTITY_BOT
+
+  @property
+  def is_service(self):
+    """True if this object represents service account."""
+    return self.kind == IDENTITY_SERVICE
+
+  @property
   def is_user(self):
     """True if this object represents user account."""
     return self.kind == IDENTITY_USER

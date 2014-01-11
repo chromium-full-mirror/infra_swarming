@@ -17,8 +17,12 @@ from . import model
 from . import tokens
 
 __all__ = [
-  'XSRFToken', 'AuthenticatingHandler', 'AuthenticationMethod',
-  'CookieAuthentication', 'OAuthAuthentication', 'bootstrap',
+  'AuthenticatingHandler',
+  'AuthenticationMethod',
+  'CookieAuthentication',
+  'OAuthAuthentication',
+  'ServiceToServiceAuthentication',
+  'bootstrap',
 ]
 
 
@@ -68,6 +72,7 @@ class AuthenticatingHandler(webapp2.RequestHandler):
           identity, is_admin = method_cls.authenticate(self.request)
           assert isinstance(identity, model.Identity)
           assert is_admin in (True, False)
+          assert not is_admin or (is_admin and identity.is_user)
           break
         except api.AuthenticationError as err:
           logging.error('Authentication error.\n%s', err)
@@ -127,16 +132,13 @@ class AuthenticatingHandler(webapp2.RequestHandler):
     """Called when authentication succeeds, but access is denied.
 
     Args:
-      error: instance of AuthorizationError subclass.
+      error: instance of api.AuthorizationError subclass.
     """
     self.abort(403, detail=str(error))
 
 
 class AuthenticationMethod(object):
-  """Knows how to authenticate webapp2 requests.
-
-  Given Request can extract Identity information from it.
-  """
+  """Given Request can extract Identity information from it."""
 
   # If True AuthenticatingHandler will validate XSRF token.
   requires_xsrf_token = True
@@ -179,9 +181,9 @@ class CookieAuthentication(AuthenticationMethod):
 class OAuthAuthentication(AuthenticationMethod):
   """OAuth2 based authentication."""
 
-  # Each request includes 'Authorization' header, no need to XSRF token.
+  # Each request includes 'Authorization' header, no need for XSRF token.
   requires_xsrf_token = False
-  # OAuth2 service scope to use for authentication.
+  # OAuth2 scope token should have.
   oauth_scope = 'https://www.googleapis.com/auth/userinfo.email'
 
   @classmethod
@@ -228,7 +230,7 @@ class ServiceToServiceAuthentication(AuthenticationMethod):
     return identity, False
 
 
-# Global list of AuthenticationMethod classes to use for all request.
+# Global list of default AuthenticationMethod classes to use for all request.
 _authenticators = [
   ServiceToServiceAuthentication,
   CookieAuthentication,
