@@ -33,7 +33,7 @@ class Token(object):
   """Base class for token types.
 
   Usage:
-    1) Define token class, configuring its kind, expiration name of a secret:
+    1) Define token class, configuring its kind, expiration, name of a secret:
       class MyToken(Token):
         kind = 'my_token'
         expiration_sec = 3600
@@ -74,7 +74,7 @@ class Token(object):
     if not secret:
       raise BadSecretError('Secret key is missing')
 
-    # Append expiration timestamp.
+    # Append expiration timestamp (in milliseconds).
     if cls.expiration_sec is not None:
       embedded['_x'] = str(int(time.time() * 1000 + cls.expiration_sec * 1000))
 

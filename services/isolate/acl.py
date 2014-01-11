@@ -277,94 +277,6 @@ class WhitelistIPAuthentication(auth.AuthenticationMethod):
 ### Handlers
 
 
-class ACLRequestHandler(webapp2.RequestHandler):
-  """Adds ACL to the request handler to ensure only valid users can use
-  the handlers."""
-  # Set to the uniquely identifiable id, either the userid or the IP address.
-  access_id = None
-  # Set to False if custom processing is required. In that case, a call to
-  # self.enforce_valid_token() is required inside the post()/put() handler.
-  enforce_token = True
-  # Token data dict embedded into token via 'generate_token'. Valid only for
-  # POST or PUT requests if 'enforce_token' is True.
-  token_data = None
-
-  def dispatch(self):
-    """Ensures that only users from valid domains can continue, and that users
-    from invalid domains receive an error message."""
-    current_user = users.get_current_user()
-    if current_user:
-      self.check_user(current_user)
-    else:
-      self.check_ip(self.request.remote_addr)
-    self.token_data = {}
-    if self.request.method in ('POST', 'PUT') and self.enforce_token:
-      self.enforce_valid_token()
-    return webapp2.RequestHandler.dispatch(self)
-
-  def check_ip(self, ip):
-    """Verifies if the IP is whitelisted."""
-    self.access_id = ip
-    iptype, ipvalue = parse_ip(ip)
-    whitelisted = WhitelistedIP.get_by_id(ip_to_str(iptype, ipvalue))
-    if not whitelisted:
-      logging.warning('Blocking IP %s', ip)
-      self.abort(401, detail='Please login first.')
-    if whitelisted.group:
-      # Any member of of the group can impersonate others. This is to enable
-      # support for slaves behind proxies with multiple IPs.
-      self.access_id = whitelisted.group
-
-  def check_user(self, user):
-    """Verifies if the user is whitelisted."""
-    domain = user.email().partition('@')[2]
-    if not users.is_current_user_admin():
-      logging.warning('Disallowing %s, invalid domain' % user.email())
-      self.abort(403, detail='Invalid domain, %s' % domain)
-    # user_id() is only set with Google accounts, fallback to the email address
-    # otherwise.
-    self.access_id = user.user_id() or user.email()
-
-  def generate_token(self, token_data=None):
-    """Returns new access token.
-
-    Arguments:
-      token_data: optional dict with string keys and values that will be
-                  embedded into the token. It's later accessible as
-                  self.token_data. It's publicly visible.
-    """
-    assert self.access_id is not None
-    return generate_token(
-        self.access_id,
-        self._get_token_secret(),
-        TOKEN_EXPIRATION_SEC,
-        token_data)
-
-  def enforce_valid_token(self):
-    """Ensures the token is valid, populates self.token_data."""
-    assert self.access_id is not None
-    token = self.request.get('token')
-    if not token:
-      logging.info('Token was not provided')
-      self.abort(403)
-    try:
-      self.token_data = validate_token(
-          token,
-          self.access_id,
-          self._get_token_secret())
-    except InvalidTokenError as err:
-      logging.error('Invalid token.\n%s', err)
-      self.abort(403, detail='Invalid token.')
-
-  @staticmethod
-  def _get_token_secret():
-    """Returns secret key used to sign or validate a token."""
-    app_id = app_identity.get_application_id()
-    return 'token-secret-%s-%s' % (
-        config.settings().global_secret,
-        str(app_id))
-
-
 class RestrictedWhitelistIPHandler(auth.AuthenticatingHandler):
   """Whitelists the current IP.
 
@@ -428,8 +340,6 @@ class RestrictedWhitelistIPHandler(auth.AuthenticatingHandler):
     }
     self.response.out.write(template.get('whitelistip.html').render(data))
     self.response.headers['Content-Type'] = 'text/html'
-
-
 
 
 def bootstrap():

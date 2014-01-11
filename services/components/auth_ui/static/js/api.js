@@ -95,7 +95,7 @@ exports.setXSRFToken = function(token) {
 
 // Refetches XSRF token from server.
 exports.updateXSRFToken = function() {
-  var endpoint = '/auth/api/v1/accounts/xsrf_token';
+  var endpoint = '/auth/api/v1/accounts/self/xsrf_token';
   var headers = {'X-XSRF-Token-Request': '1'};
   var request = call('POST', endpoint, null, headers);
   request.then(function(response) {

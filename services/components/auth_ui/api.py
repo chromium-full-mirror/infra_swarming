@@ -94,12 +94,12 @@ class SelfHandler(ApiHandler):
     self.send_response({'identity': auth.get_current_identity().to_bytes()})
 
 
-@route('/auth/api/v1/accounts/xsrf_token')
+@route('/auth/api/v1/accounts/self/xsrf_token')
 class XSRFHandler(ApiHandler):
   """Generates XSRF token on demand."""
 
   # Don't enforce prior XSRF token, it might not be known yet.
-  enforce_xsrf_token = ()
+  xsrf_token_enforce_on = ()
 
   @auth.public
   def post(self):
@@ -112,7 +112,7 @@ class XSRFHandler(ApiHandler):
 class GroupsHandler(ApiHandler):
   """Group listing."""
 
-  @auth.require(auth.READ, 'auth/management/groups/')
+  @auth.require(auth.READ, 'auth/management/groups')
   def get(self):
     groups = model.AuthGroup.query(ancestor=model.ROOT_KEY).fetch()
     self.send_response({

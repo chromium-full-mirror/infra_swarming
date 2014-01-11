@@ -26,15 +26,9 @@ __all__ = [
 ]
 
 
-# Request header a client can use for XSRF token.
-XSRF_TOKEN_HEADER = 'X-XSRF-Token'
-# GET or POST parameters a client can use for XSRF token.
-XSRF_TOKEN_REQUEST_PARAM = 'xsrf_token'
-
-
 class XSRFToken(tokens.Token):
-  """XSRF token generation parameters."""
-  kind = 'xsrf'
+  """Default XSRF token generation parameters."""
+  kind = 'xsrf_token'
   expiration_sec = 2 * 3600
   secret_key = api.SecretKey('xsrf_token', 'local')
 
@@ -58,8 +52,14 @@ class AuthenticatingHandler(webapp2.RequestHandler):
   # Checks that all 'get', 'post', etc. are marked with @require or @public.
   __metaclass__ = AuthenticatingHandlerMetaclass
 
-  # List of HTTP methods that require valid XSRF token.
-  enforce_xsrf_token = ('DELETE', 'POST', 'PUT')
+  # List of HTTP methods that trigger XSRF token validation.
+  xsrf_token_enforce_on = ('DELETE', 'POST', 'PUT')
+  # Header to use when searching for XSRF token.
+  xsrf_token_header = 'X-XSRF-Token'
+  # Request parameter (GET or POST) to use when searching for XSRF token.
+  xsrf_token_request_param = 'xsrf_token'
+  # Embedded data extracted from current xsrf_token.
+  xsrf_token_data = None
 
   def dispatch(self):
     """Extracts and verifies Identity."""
@@ -84,9 +84,9 @@ class AuthenticatingHandler(webapp2.RequestHandler):
 
     try:
       # Verify XSRF token if required.
-      if (method_cls.requires_xsrf_token and
-          self.request.method in self.enforce_xsrf_token):
-        self.verify_xsrf_token()
+      self.xsrf_token_data = {}
+      if self.request.method in self.xsrf_token_enforce_on:
+        self.xsrf_token_data = self.verify_xsrf_token()
 
       # All other ACL checks will be performed by corresponding handlers
       # manually or via 'required' decorator.
@@ -95,24 +95,27 @@ class AuthenticatingHandler(webapp2.RequestHandler):
       logging.error('Authorization error.\n%s', err)
       self.authorization_error(err)
 
-  def generate_xsrf_token(self):
-    """Returns new XSRF token."""
-    return XSRFToken.generate(api.get_current_identity().to_bytes())
+  def generate_xsrf_token(self, xsrf_token_data=None):
+    """Returns new XSRF token that embeds |xsrf_token_data|."""
+    return XSRFToken.generate(
+        api.get_current_identity().to_bytes(), xsrf_token_data)
 
   def verify_xsrf_token(self):
-    """Ensures XSRF token is correct.
+    """Ensures XSRF token is correct, extracts |xsrf_token_data|.
 
     Raises AuthorizationError if token is missing or incorrect.
     """
-    token = (
-        self.request.headers.get(XSRF_TOKEN_HEADER) or
-        self.request.get(XSRF_TOKEN_REQUEST_PARAM))
-    if token is None:
+    token = None
+    if self.xsrf_token_header:
+      token = self.request.headers.get(self.xsrf_token_header)
+    if not token and self.xsrf_token_request_param:
+      token = self.request.get(self.xsrf_token_request_param)
+    if not token:
       raise api.AuthorizationError('XSRF token is missing')
     try:
       if isinstance(token, unicode):
         token = token.encode('ascii')
-      XSRFToken.validate(token, api.get_current_identity().to_bytes())
+      return XSRFToken.validate(token, api.get_current_identity().to_bytes())
     except tokens.InvalidTokenError as err:
       raise api.AuthorizationError(str(err))
 
@@ -140,9 +143,6 @@ class AuthenticatingHandler(webapp2.RequestHandler):
 class AuthenticationMethod(object):
   """Given Request can extract Identity information from it."""
 
-  # If True AuthenticatingHandler will validate XSRF token.
-  requires_xsrf_token = True
-
   @classmethod
   def is_applicable(cls, request):
     """Returns True if this authenticator can be used with given request."""
@@ -162,8 +162,6 @@ class AuthenticationMethod(object):
 class CookieAuthentication(AuthenticationMethod):
   """AppEngine cookie based authentication."""
 
-  requires_xsrf_token = True
-
   @classmethod
   def is_applicable(cls, request):
     return bool(users.get_current_user())
@@ -181,8 +179,6 @@ class CookieAuthentication(AuthenticationMethod):
 class OAuthAuthentication(AuthenticationMethod):
   """OAuth2 based authentication."""
 
-  # Each request includes 'Authorization' header, no need for XSRF token.
-  requires_xsrf_token = False
   # OAuth2 scope token should have.
   oauth_scope = 'https://www.googleapis.com/auth/userinfo.email'
 
