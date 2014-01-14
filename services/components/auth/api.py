@@ -7,6 +7,7 @@
 import collections
 import functools
 import inspect
+import logging
 import os
 import re
 import threading
@@ -199,11 +200,16 @@ def get_current_identity():
 
 def has_permission(action, resource):
   """True if current identity can execute |action| against |resource|."""
-  # Escape hatch for admins to fix broken ACL rules.
-  if get_request_cache().is_admin:
+  ident = get_current_identity()
+  if get_request_auth_db().has_permission(ident, action, resource):
     return True
-  return get_request_auth_db().has_permission(
-      get_current_identity(), action, resource)
+  # Escape hatch for admins to fix broken ACL rules. Should be used only in
+  # exceptional circumstances, so add warning if used.
+  if get_request_cache().is_admin:
+    logging.warning(
+        'Exercising admin superpowers: %s to %s %s', ident, action, resource)
+    return True
+  return False
 
 
 ################################################################################

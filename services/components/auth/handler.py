@@ -30,7 +30,7 @@ class XSRFToken(tokens.Token):
   """XSRF token parameters."""
   kind = 'xsrf_token'
   expiration_sec = 2 * 3600
-  secret_key = api.SecretKey('xsrf_token', 'local')
+  secret_key = api.SecretKey('xsrf_token', scope='local')
 
 
 class AuthenticatingHandlerMetaclass(type):

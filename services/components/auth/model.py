@@ -7,6 +7,7 @@
 import collections
 import datetime
 import fnmatch
+import logging
 import os
 import re
 
@@ -413,6 +414,7 @@ class AuthSecret(utils.SerializableModel):
       entity = key.get()
       if entity is not None:
         return entity
+      logging.warning('Creating new secret key %s in %s scope', name, scope)
       entity = cls(key=key, retention=retention)
       entity.update(os.urandom(32))
       entity.put()
@@ -473,6 +475,7 @@ class AuthDB(object):
     # Use _seen to avoid infinite recursion if group nesting graph has cycles.
     _seen = _seen or set()
     if group in _seen:
+      logging.error('Cycle in a group graph\nInfo: %s, %s', group, _seen)
       return False
     _seen.add(group)
 
@@ -575,12 +578,14 @@ def fetch_auth_db(known_version=None):
   # instance launches.
   if not _lazy_bootstrap_ran:
     _lazy_bootstrap_ran = True
+    logging.info('Bootstrapping AuthDB models')
     ndb.Future.wait_all([
       AuthGlobalConfig.get_or_insert_async(ROOT_KEY.string_id()),
       AuthServiceConfig.get_or_insert_async('default', parent=ROOT_KEY),
     ])
 
   # Fetching all stuff in parallel.
+  logging.info('Fetching AuthDB')
   global_config = ROOT_KEY.get_async()
   service_config = AuthServiceConfig.get_by_id_async('default', parent=ROOT_KEY)
   groups = AuthGroup.query(ancestor=ROOT_KEY).fetch_async()
