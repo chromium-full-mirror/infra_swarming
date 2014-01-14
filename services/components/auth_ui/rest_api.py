@@ -85,7 +85,7 @@ class OAuthConfigHandler(ApiHandler):
 
   @auth.public
   def get(self):
-    auth_db = auth.get_request_auth_db()
+    auth_db = auth.api.get_request_auth_db()
     client_id, client_secret = auth_db.get_oauth_config()
     self.send_response({
       'client_id': client_id,
