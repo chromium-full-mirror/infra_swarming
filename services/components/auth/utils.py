@@ -5,21 +5,38 @@
 """NDB related utilities."""
 
 import datetime
-from email import utils
 
 from google.appengine.ext import ndb
 
 
+# Use field only when converting entity to a simple dict.
 READ_ONLY = 0
+# Use field when converting entity to or from a simple dict.
 WRITABLE = 1
 
 
 class SerializableModel(ndb.Model):
+  """Base class for entity that can serialize itself to simple dicts.
+
+  A simple dictionary is a dictionary with string keys and values that are:
+    * Scalar types: int, long, float.
+    * String types: str, unicode.
+    * Sequences: list, tuple.
+    * Another simple dictionaries.
+
+  A simple dict trivially converts to/from JSON.
+  """
+
   @classmethod
   def get_serializable_fields(cls):
+    """Returns dictionary: key name -> READ_ONLY or WRITABLE.
+
+    It defines how to convert an entity to or from a simple dict.
+    """
     return None
 
   def to_simple_dict(self, include=None, exclude=None, with_id_as=None):
+    """Converts this entity to a simple dictionary."""
     conv = _ModelDictConverter(
         property_converters=_rich_to_simple_converters,
         allowed_field_modes=(READ_ONLY, WRITABLE))
@@ -32,6 +49,10 @@ class SerializableModel(ndb.Model):
 
   @classmethod
   def convert_simple_dict(cls, simple_dict):
+    """Converts simple dictionary to a dictionary with entity property values.
+
+    It can then be used in entity constructor or in 'populate' method.
+    """
     conv = _ModelDictConverter(
         property_converters=_simple_to_rich_converters,
         allowed_field_modes=(WRITABLE,))
@@ -39,6 +60,8 @@ class SerializableModel(ndb.Model):
 
 
 class _ModelDictConverter(object):
+  """Uses |property_converters| to recursively convert dictionary values."""
+
   def __init__(self, property_converters, allowed_field_modes):
     self.property_converters = property_converters
     self.allowed_field_modes = allowed_field_modes
@@ -108,18 +131,19 @@ def register_converter(
 ## Register trivial properties.
 
 
-# Properties with values that look exactly the same in to_dict()
-# and in to_simple_dict().
+# Properties with values that look exactly the same in to_dict() and
+# in to_simple_dict() representations.
 SIMPLE_PROPERTIES = [
-  ndb.BooleanProperty,
-  ndb.IntegerProperty,
-  ndb.FloatProperty,
   ndb.BlobProperty,
-  ndb.TextProperty,
-  ndb.StringProperty,
-  ndb.PickleProperty,
+  ndb.BooleanProperty,
+  ndb.FloatProperty,
+  ndb.IntegerProperty,
   ndb.JsonProperty,
+  ndb.PickleProperty,
+  ndb.StringProperty,
+  ndb.TextProperty,
 ]
+
 
 def _register_simple_converters():
   noop = lambda _prop, x: x
@@ -129,6 +153,7 @@ def _register_simple_converters():
         include_subclasses=False,
         rich_to_simple=noop,
         simple_to_rich=noop)
+
 
 _register_simple_converters()
 
@@ -154,11 +179,7 @@ def timestamp_to_datetime(value):
   return _EPOCH + datetime.timedelta(microseconds=value*1000)
 
 
-def datetime_to_rfc2822(value):
-  """Converts UTC datetime value to string suitable for HTTP headers."""
-  return utils.formatdate(datetime_to_timestamp(value) / 1000.0)
-
-
+# TODO(vadimsh): Add ndb.DateProperty if needed.
 register_converter(
     property_cls=ndb.DateTimeProperty,
     include_subclasses=False,
@@ -208,6 +229,7 @@ class BytesSerializableProperty(ndb.BlobProperty):
     return result
 
 
+# Handles all property classes inherited from BytesSerializableProperty.
 register_converter(
     property_cls=BytesSerializableProperty,
     include_subclasses=True,
@@ -253,6 +275,7 @@ class JsonSerializableProperty(ndb.JsonProperty):
     return self._value_type.from_jsonish(value)
 
 
+# Handles all property classes inherited from JsonSerializableProperty.
 register_converter(
     property_cls=JsonSerializableProperty,
     include_subclasses=True,

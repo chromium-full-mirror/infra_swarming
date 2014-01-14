@@ -16,8 +16,15 @@ from google.appengine.ext.ndb import metadata
 from . import utils
 
 __all__ = [
-  'CREATE', 'DELETE', 'READ', 'UPDATE', 'Identity', 'Anonymous',
-  'IdentityProperty', 'IdentityGlob', 'IdentityGlobProperty',
+  'Anonymous',
+  'CREATE',
+  'DELETE',
+  'Identity',
+  'IdentityGlob',
+  'IdentityGlobProperty',
+  'IdentityProperty',
+  'READ',
+  'UPDATE',
 ]
 
 
@@ -61,20 +68,25 @@ GROUP_ALL = '*'
 ROOT_KEY = ndb.Key('AuthGlobalConfig', 'root')
 
 
+################################################################################
+## Identity & IdentityGlob.
+
+
 class Identity(
     utils.BytesSerializable,
     collections.namedtuple('Identity', 'kind, name')):
   """Represents a caller that can make requests. Immutable.
 
   A tuple of (kind, name) where 'kind' is one of IDENTITY_* constants and
-  meaning of 'name' depends on kind. It generalizes real people accounts and bot
-  accounts.
+  meaning of 'name' depends on a kind. It generalizes real people accounts,
+  bot accounts and service-to-service accounts.
 
   It's a pure identity information. Any additional information that may be
-  related to an identity (like maybe registration date, etc.) should be stored
+  related to an identity (like registration date, etc.) should be stored
   elsewhere using Identity.to_bytes() as a primary key.
   """
 
+  # Empty slots prohibit adding attributes to |self| on the fly.
   __slots__ = ()
 
   def __new__(cls, kind, name):
@@ -121,15 +133,14 @@ class Identity(
     return self.kind == IDENTITY_USER
 
 
-# Predefined Anonymous identity. While not strictly a singleton, it's still can
-# be used in comparisons like identity_obj == Anonymous.
+# Predefined Anonymous identity.
 Anonymous = Identity(IDENTITY_ANONYMOUS, 'anonymous')
 
 
 class IdentityProperty(utils.BytesSerializableProperty):
   """NDB model property for Identity values.
 
-  Identities are stored as short blobs internally.
+  Identities are stored as indexed short blobs internally.
   """
   _value_type = Identity
   _indexed = True
@@ -140,6 +151,7 @@ class IdentityGlob(
     collections.namedtuple('IdentityGlob', 'kind, pattern')):
   """Glob like pattern that matches subset of identities. Immutable."""
 
+  # Empty slots prohibit adding attributes to |self| on the fly.
   __slots__ = ()
 
   def __new__(cls, kind, pattern):
@@ -176,13 +188,14 @@ class IdentityGlob(
 class IdentityGlobProperty(utils.BytesSerializableProperty):
   """NDB model property for IdentityGlob values.
 
-  IdentityGlobs are stored as short blobs internally.
+  IdentityGlobs are stored as short indexed blobs internally.
   """
   _value_type = IdentityGlob
   _indexed = True
 
 
 ################################################################################
+## AccessRule.
 
 
 class AccessRule(
@@ -190,6 +203,7 @@ class AccessRule(
     collections.namedtuple('AccessRule', 'kind, group, actions, resource')):
   """Single access rule definition. Immutable."""
 
+  # Empty slots prohibit adding attributes to |self| on the fly.
   __slots__ = ()
 
   def __new__(cls, kind, group, actions, resource):
@@ -208,7 +222,7 @@ class AccessRule(
         raise ValueError('Invalid action: %s' % action)
     actions = tuple(sorted(map(str, set(actions))))
 
-    # Validate resource regular expression.
+    # Validate resource regular expression, prohibit open-ended patterns.
     if not resource.endswith('$'):
       raise ValueError('Resource pattern should end with \'$\': %s' % resource)
     try:
@@ -244,23 +258,26 @@ class AccessRuleProperty(utils.JsonSerializableProperty):
 
 
 ################################################################################
+## Root models: AuthGlobalConfig and AuthServiceConfig.
 
 
 class AuthGlobalConfig(ndb.Model):
   """Acts as a root entity for all other auth models.
 
-  Replicated between services.
+  There should be only one instance of this model, with key ROOT_KEY.
+
+  Replicated from master auth services to slave services.
   """
-  # OAuth2 client_id allowed to access the services.
+  # OAuth2 client_ids allowed to access the services.
   oauth_client_ids = ndb.StringProperty(repeated=True, indexed=False)
 
 
 class AuthServiceConfig(utils.SerializableModel):
   """Holds ACL rules and other configuration for a single service.
 
-  Master auth service have multiple entities of this kind, while each managed
-  service has only one (with id 'default'), that gets replicated from
-  corresponding master entity.
+  Master auth service have multiple entities of this kind for each slave service
+  (with entity id set to service name), while each slave service has only one
+  (with id 'default'), that gets replicated from corresponding master entity.
   """
 
   @classmethod
@@ -271,24 +288,24 @@ class AuthServiceConfig(utils.SerializableModel):
       'modified_by': utils.READ_ONLY,
     }
 
-  # All ACL rules.
+  # All ACL rules. Order is important.
   rules = AccessRuleProperty(repeated=True)
 
-  # OAuth2 client_id of the service.
+  # OAuth2 client_id of the service, can be used to mint new OAuth2 tokens.
   oauth_client_id = ndb.StringProperty(indexed=False)
-  # OAuth2 client secret required to mint access_tokens.
+  # OAuth2 client secret, required to mint new OAuth2 tokens.
   oauth_client_secret = ndb.StringProperty(indexed=False)
 
-  # When rules were modified last time, used in conditional requests.
+  # When entity were modified last time, used in conditional requests.
   modified_ts = ndb.DateTimeProperty(auto_now=True, indexed=False)
-  # Who modified the rules last time.
+  # Who modified the entity last time.
   modified_by = IdentityProperty(indexed=False)
 
 
 class AuthGroup(utils.SerializableModel):
-  """A user group.
+  """A group of identities.
 
-  Replicated between services.
+  Replicated between services, with source of truth in master auth service.
   """
 
   @classmethod
@@ -312,7 +329,7 @@ class AuthGroup(utils.SerializableModel):
   nested = ndb.StringProperty(repeated=True)
 
   # Human readable description.
-  description = ndb.StringProperty()
+  description = ndb.StringProperty(indexed=False)
 
   # When the group was created.
   created_ts = ndb.DateTimeProperty(auto_now_add=True)
@@ -325,20 +342,37 @@ class AuthGroup(utils.SerializableModel):
   modified_by = IdentityProperty()
 
 
+################################################################################
+## Secrets store.
+
+
 class AuthSecretStore(ndb.Model):
-  """Entity kind to act as parent entity for AuthSecret."""
+  """Entity kind to act as parent entity for AuthSecret.
+
+  AuthSecretStore have root AuthGlobalConfig (key is ROOT_KEY) as a parent.
+
+  Id of this entity defines scope of secret keys ('local' or 'global') that have
+  this entity as a parent.
+
+  Secrets in 'local' scope never leave Datastore they are stored in and they
+  are different for each slave service.
+
+  Secrets in 'global' scope are defined in master auth service's Datastore and
+  are replicated to all slave services.
+  """
 
 
 class AuthSecret(utils.SerializableModel):
-  """Some shared secret with auto-expiration.
+  """Some service-wide secret string.
 
   Entity can be a child of:
     * Key(AuthSecretStore, 'global', parent=ROOT_KEY):
-        Global secrets replicated across services.
+        Global secrets replicated across all services.
     * Key(AuthSecretStore, 'local', parent=ROOT_KEY):
         Secrets local to the current service.
 
-  Both parent keys (and thus all AuthSecrets) belong to ROOT_KEY entity group.
+  There should be only very limited number of AuthSecret entities around. AuthDB
+  fetches them all at once. Do not use this entity for per-user secrets.
   """
   # How many historical values to hold.
   retention = ndb.IntegerProperty(default=2, indexed=False)
@@ -350,7 +384,7 @@ class AuthSecret(utils.SerializableModel):
   # Who modified the secret last time.
   modified_by = IdentityProperty()
 
-  def update(self, secret, author, keep_previous=True):
+  def update(self, secret, author=None, keep_previous=True):
     """Generates new key value, optionally remembering previous one."""
     values = list(self.values or [])
     if keep_previous:
@@ -364,15 +398,13 @@ class AuthSecret(utils.SerializableModel):
     self.modified_by = author
 
   @classmethod
-  def get_entity_key(cls, name, scope):
-    """Returns ndb.Key that correspond to a secret key."""
+  def bootstrap(cls, name, scope, retention=2):
+    """Creates a secret key if it doesn't exist yet."""
+    # Note that 'get_or_insert' is a bad fit here. With 'get_or_insert' we'd
+    # have to call os.urandom every time we want to get a key. It's a waste of
+    # time and entropy.
     assert scope in ('local', 'global')
-    return ndb.Key(AuthSecretStore, scope, cls, name, parent=ROOT_KEY)
-
-  @classmethod
-  def bootstrap(cls, author, name, scope, retention=2):
-    """Creates a secret key if it doesn't exist."""
-    key = cls.get_entity_key(name, scope)
+    key = ndb.Key(AuthSecretStore, scope, cls, name, parent=ROOT_KEY)
     entity = key.get()
     if entity is not None:
       return entity
@@ -382,20 +414,26 @@ class AuthSecret(utils.SerializableModel):
       if entity is not None:
         return entity
       entity = cls(key=key, retention=retention)
-      entity.update(os.urandom(32), author)
+      entity.update(os.urandom(32))
       entity.put()
       return entity
     return create()
 
 
 ################################################################################
+## DB of ACL rules.
 
 
 class AuthDB(object):
-  """Represents an entire read-only database of ACL Rules and User Groups."""
+  """A read-only database of ACL Rules and User Groups for a service."""
 
-  def __init__(self, global_config=None, service_config=None,
-               groups=None, secrets=None, entity_group_version=None):
+  def __init__(
+      self,
+      global_config=None,
+      service_config=None,
+      groups=None,
+      secrets=None,
+      entity_group_version=None):
     self.global_config = global_config or AuthGlobalConfig()
     self.service_config = service_config or AuthServiceConfig()
     self.groups = dict((g.key.string_id(), g) for g in (groups or []))
@@ -403,11 +441,11 @@ class AuthDB(object):
     self.entity_group_version = entity_group_version
     self.allowed_oauth_client_ids = set()
 
-    # Split |secrets| into local and global ones based on parent key.
+    # Split |secrets| into local and global ones based on parent key id.
     for secret in (secrets or []):
       scope = secret.key.parent().string_id()
-      if scope in self.secrets:
-        self.secrets[scope][secret.key.string_id()] = secret
+      assert scope in self.secrets, scope
+      self.secrets[scope][secret.key.string_id()] = secret
 
     # Grab the list of allowed OAuth client_ids.
     if self.service_config.oauth_client_id:
@@ -416,18 +454,18 @@ class AuthDB(object):
       self.allowed_oauth_client_ids.update(self.global_config.oauth_client_ids)
 
   def get_groups(self, identity=None):
-    """Return set of group names that contain |identity| as a member."""
+    """Returns a set of group names that contain |identity| as a member."""
     if not identity:
       return set(self.groups)
     return set(g for g in self.groups if self.is_group_member(identity, g))
 
   def is_group_member(self, identity, group, _seen=None):
-    """Return True if |identity| belongs to group |group|."""
-    # Wildcard group that matches all identities (including anonymous).
+    """Returns True if |identity| belongs to group |group|."""
+    # Wildcard group that matches all identities (including anonymous!).
     if group == GROUP_ALL:
       return True
 
-    # Unknown group is by convention empty.
+    # An unknown group is empty.
     group_obj = self.groups.get(group)
     if not group_obj:
       return False
@@ -454,7 +492,7 @@ class AuthDB(object):
 
   def get_rules(self):
     """Return all defined AccessRules."""
-    return self.service_config.rules or []
+    return list(self.service_config.rules)
 
   def get_matching_rules(self, identity=None, action=None, resource=None):
     """Return list of AccessRules that match given ACL query."""
@@ -474,7 +512,7 @@ class AuthDB(object):
     # No rules match -> apply default 'deny all' rule.
     return rules or [AccessRule(DENY_RULE, GROUP_ALL, ALLOWED_ACTIONS, '.*$')]
 
-  def check_identity_has_permission(self, identity, action, resource):
+  def has_permission(self, identity, action, resource):
     """True if |identity| can execute |action| against |resource|."""
     assert action in ALLOWED_ACTIONS
     for rule in self.service_config.rules:
@@ -488,15 +526,21 @@ class AuthDB(object):
     """Returns list of strings with last known values of a secret key."""
     if scope not in self.secrets:
       raise ValueError('Invalid secret key scope')
-    entity = self.secrets[scope].get(name)
-    return list(entity.values) if entity and entity.values else None
+    # There's a race condition here: multiple requests, that share same AuthDB
+    # object, fetch same missing secret key. It's rare (since key bootstrap
+    # process is rare) and not harmful (since AuthSecret.bootstrap is
+    # implemented with transaction inside). We ignore it.
+    if name not in self.secrets[scope]:
+      self.secrets[scope][name] = AuthSecret.bootstrap(name, scope)
+    entity = self.secrets[scope][name]
+    return list(entity.values)
 
   def is_allowed_oauth_client_id(self, client_id):
-    """True if given client_id is known."""
+    """True if given OAuth client_id can be used to authenticate the user."""
     return client_id and client_id in self.allowed_oauth_client_ids
 
   def get_oauth_config(self):
-    """Returns tuple (client_id, client_secret)."""
+    """Returns a tuple with current service's (client_id, client_secret)."""
     if not self.service_config:
       return None, None
     return (
@@ -504,7 +548,11 @@ class AuthDB(object):
         self.service_config.oauth_client_secret)
 
 
-def fetch_auth_db(service='default', known_version=None):
+# True if fetch_auth_db was called at least once and created all root entities.
+_lazy_bootstrap_ran = False
+
+
+def fetch_auth_db(known_version=None):
   """Return new instance of AuthDB fetching it from Datastore.
 
   If |known_version| is None, this function always returns a new instance.
@@ -514,14 +562,27 @@ def fetch_auth_db(service='default', known_version=None):
   and compare it to |known_version|. It they match, function will return None,
   otherwise it will fetch a fresh copy of AuthDB and return it.
   """
+  global _lazy_bootstrap_ran
+
   # Don't fetch anything if |known_version| is up to date.
   current_version = metadata.get_entity_group_version(ROOT_KEY)
   if known_version is not None and current_version == known_version:
     return None
 
+  # Run bootstrap code at most once per lifetime of an instance. We do it lazily
+  # here (instead of module scope) to ensure NDB calls are happening in
+  # a context of HTTP request. Hypothetically it reduces probability of stuck
+  # instance launches.
+  if not _lazy_bootstrap_ran:
+    _lazy_bootstrap_ran = True
+    ndb.Future.wait_all([
+      AuthGlobalConfig.get_or_insert_async(ROOT_KEY.string_id()),
+      AuthServiceConfig.get_or_insert_async('default', parent=ROOT_KEY),
+    ])
+
   # Fetching all stuff in parallel.
   global_config = ROOT_KEY.get_async()
-  service_config = AuthServiceConfig.get_by_id_async(service, parent=ROOT_KEY)
+  service_config = AuthServiceConfig.get_by_id_async('default', parent=ROOT_KEY)
   groups = AuthGroup.query(ancestor=ROOT_KEY).fetch_async()
   secrets = AuthSecret.query(ancestor=ROOT_KEY).fetch_async()
 
@@ -534,12 +595,3 @@ def fetch_auth_db(service='default', known_version=None):
       groups=groups.get_result(),
       secrets=secrets.get_result(),
       entity_group_version=current_version)
-
-
-def bootstrap():
-  """Creates root entities if they don't exist yet."""
-  futures = [
-    AuthGlobalConfig.get_or_insert_async(ROOT_KEY.string_id()),
-    AuthServiceConfig.get_or_insert_async('default', parent=ROOT_KEY)
-  ]
-  ndb.Future.wait_all(futures)

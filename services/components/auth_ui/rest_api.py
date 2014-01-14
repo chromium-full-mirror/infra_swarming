@@ -2,17 +2,19 @@
 # Use of this source code is governed by the Apache v2.0 license that can be
 # found in the LICENSE file.
 
-"""ACL management public API."""
+"""ACL management REST API."""
 
 import json
+import time
 import urllib
 import webapp2
+
+from email import utils as email_utils
 
 from google.appengine.ext import ndb
 
 from components import auth
 from components.auth import model
-from components.auth import utils
 
 
 # webapp2 routes defined in this file, collected by 'route' decorator.
@@ -32,8 +34,14 @@ def route(regexp):
   return decorator
 
 
+def datetime_to_rfc2822(dt):
+  """datetime -> string value for Last-Modified header as defined by RFC2822."""
+  assert dt.tzinfo is None, 'Expecting UTC timestamp: %s' % dt
+  return email_utils.formatdate(time.mktime(dt.timetuple()))
+
+
 class ApiHandler(auth.AuthenticatingHandler):
-  """Parses JSON request body to dict."""
+  """Parses JSON request body to a dict, serializes response to JSON."""
 
   # Content type of requests and responses.
   content_type = 'application/json; charset=UTF-8'
@@ -116,9 +124,7 @@ class GroupsHandler(ApiHandler):
   def get(self):
     groups = model.AuthGroup.query(ancestor=model.ROOT_KEY).fetch()
     self.send_response({
-      'groups': [
-        g.to_simple_dict(with_id_as='name') for g in groups
-      ],
+      'groups': [g.to_simple_dict(with_id_as='name') for g in groups],
     })
 
 
@@ -144,7 +150,7 @@ class GroupHandler(ApiHandler):
     if not entity:
       self.abort_with_error(404, text='No such group')
     headers = {
-      'Last-Modified': utils.datetime_to_rfc2822(entity.modified_ts),
+      'Last-Modified': datetime_to_rfc2822(entity.modified_ts),
     }
     self.send_response(
         {'group': entity.to_simple_dict(with_id_as='name')}, headers=headers)
@@ -161,7 +167,7 @@ class GroupHandler(ApiHandler):
         self.abort_with_error(404, text='No such group')
       # Midair collision?
       given = self.request.headers.get('If-Unmodified-Since')
-      expected = utils.datetime_to_rfc2822(entity.modified_ts)
+      expected = datetime_to_rfc2822(entity.modified_ts)
       if given and given != expected:
         self.abort_with_error(412, text='Group was modified by someone else')
       # Update, store.
@@ -192,7 +198,7 @@ class GroupHandler(ApiHandler):
         self.abort_with_error(409, text='Such group already exists')
       entity.put()
       headers = {
-        'Last-Modified': utils.datetime_to_rfc2822(entity.modified_ts),
+        'Last-Modified': datetime_to_rfc2822(entity.modified_ts),
         'Location': '/auth/api/v1/groups/%s' % urllib.quote(entity.key.id()),
       }
       self.send_response({'ok': True}, http_code=201, headers=headers)
@@ -218,7 +224,7 @@ class RulesHandler(ApiHandler):
     entity = model.AuthServiceConfig.get_or_insert(
         'default', parent=model.ROOT_KEY)
     headers = {
-      'Last-Modified': utils.datetime_to_rfc2822(entity.modified_ts),
+      'Last-Modified': datetime_to_rfc2822(entity.modified_ts),
     }
     self.send_response(entity.to_simple_dict(), headers=headers)
 
@@ -233,7 +239,7 @@ class RulesHandler(ApiHandler):
           'default', parent=model.ROOT_KEY)
       # Midair collision?
       given = self.request.headers.get('If-Unmodified-Since')
-      expected = utils.datetime_to_rfc2822(entity.modified_ts)
+      expected = datetime_to_rfc2822(entity.modified_ts)
       if given and given != expected:
         self.abort_with_error(412, text='Rules were modified by someone else')
       # Update, store.
@@ -298,8 +304,10 @@ class RulesHandler(ApiHandler):
     identity_groups = None
     matching_rules = None
 
-    # Get all rules that mention non-existing groups.
-    groups = auth_db.get_groups() | set('*')
+    # Get all rules that mention non-existing groups. Super-group '*' is not
+    # in the set of existing groups by default but it can be used in ACL rules,
+    # so add it to the set here.
+    groups = auth_db.get_groups() | set(['*'])
     unrecognized_groups = [
       rule.group for rule in auth_db.get_rules()
       if rule.group not in groups

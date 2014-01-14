@@ -39,15 +39,15 @@ NAVBAR_SECTIONS = (
 class UIConfig(object):
   """Global static configuration set in 'configure'."""
   app_name = 'Unknown'
-  app_revision_url = 'about:blank'
+  app_revision_url = None
   app_version = 'unknown'
 
-# Note: this variable is accessed in main.py.
+# Note: this variable is mutated in main.py.
 ui_config = UIConfig()
 
 
 class UIHandler(auth.AuthenticatingHandler):
-  """Renders HTML pages that extend base.html template."""
+  """Renders HTML pages base on Jinja templates."""
 
   css_file = None
   js_file = None

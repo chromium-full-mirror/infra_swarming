@@ -19,15 +19,15 @@ from . import tokens
 __all__ = [
   'AuthenticatingHandler',
   'AuthenticationMethod',
+  'configure',
   'CookieAuthentication',
   'OAuthAuthentication',
   'ServiceToServiceAuthentication',
-  'bootstrap',
 ]
 
 
 class XSRFToken(tokens.Token):
-  """Default XSRF token generation parameters."""
+  """XSRF token parameters."""
   kind = 'xsrf_token'
   expiration_sec = 2 * 3600
   secret_key = api.SecretKey('xsrf_token', 'local')
@@ -66,7 +66,7 @@ class AuthenticatingHandler(webapp2.RequestHandler):
     # Extract Identity, check credentials.
     identity = model.Anonymous
     is_admin = False
-    for method_cls in _authenticators:
+    for method_cls in _auth_method_classes:
       if method_cls.is_applicable(self.request):
         try:
           identity, is_admin = method_cls.authenticate(self.request)
@@ -89,7 +89,7 @@ class AuthenticatingHandler(webapp2.RequestHandler):
         self.xsrf_token_data = self.verify_xsrf_token()
 
       # All other ACL checks will be performed by corresponding handlers
-      # manually or via 'required' decorator.
+      # manually or via '@required' decorator.
       return super(AuthenticatingHandler, self).dispatch()
     except api.AuthorizationError as err:
       logging.error('Authorization error.\n%s', err)
@@ -105,6 +105,7 @@ class AuthenticatingHandler(webapp2.RequestHandler):
 
     Raises AuthorizationError if token is missing or incorrect.
     """
+    # Get token value from header or request parameter.
     token = None
     if self.xsrf_token_header:
       token = self.request.headers.get(self.xsrf_token_header)
@@ -112,6 +113,7 @@ class AuthenticatingHandler(webapp2.RequestHandler):
       token = self.request.get(self.xsrf_token_request_param)
     if not token:
       raise api.AuthorizationError('XSRF token is missing')
+    # And check that it was generated for same identity.
     try:
       if isinstance(token, unicode):
         token = token.encode('ascii')
@@ -124,28 +126,41 @@ class AuthenticatingHandler(webapp2.RequestHandler):
 
     Authentication error means that some credentials are provided but they are
     invalid. If no credentials provided at all, no authentication is attempted
-    and current identity is set to Anonymous.
+    and current identity is set to 'anonymous:anonymous'.
 
     Args:
-      error: instance of api.AuthenticationError subclass.
+      error: instance of AuthenticationError subclass.
     """
     self.abort(401, detail=str(error))
 
   def authorization_error(self, error):
     """Called when authentication succeeds, but access is denied.
 
+    Called whenever request handler raises AuthorizationError exception.
+    In particular this exception is raised by method decorated with @require if
+    current identity doesn't have required permission.
+
     Args:
-      error: instance of api.AuthorizationError subclass.
+      error: instance of AuthorizationError subclass.
     """
     self.abort(403, detail=str(error))
 
 
 class AuthenticationMethod(object):
-  """Given Request can extract Identity information from it."""
+  """Given Request can extract Identity information from it.
+
+  Base class for concrete authentication methods. Given a list of authentication
+  methods (as a list of subclasses of AuthenticationMethod),
+  AuthenticatingHandler will try to apply them sequentially one by one by
+  calling 'cls.is_applicable' until it returns True for some class.
+
+  This class's 'authenticate' will then by used to extract identity
+  from a request.
+  """
 
   @classmethod
   def is_applicable(cls, request):
-    """Returns True if this authenticator can be used with given request."""
+    """Returns True if this method can be used with given request."""
     raise NotImplementedError()
 
   @classmethod
@@ -154,7 +169,7 @@ class AuthenticationMethod(object):
 
     Will be called only if is_applicable is True for same request.
 
-    Raises api.AuthenticationError if credentials are not valid.
+    Raises AuthenticationError if credentials are invalid.
     """
     raise NotImplementedError()
 
@@ -184,7 +199,8 @@ class OAuthAuthentication(AuthenticationMethod):
 
   @classmethod
   def is_applicable(cls, request):
-    # api.oauth stub on dev server is useless.
+    # api.oauth stub on dev server is useless, oauth.get_client_id() always
+    # returns some phony value even if 'Authorization' header is not set.
     if 'Dev' in os.environ.get('SERVER_SOFTWARE', ''):
       return False
     try:
@@ -226,24 +242,21 @@ class ServiceToServiceAuthentication(AuthenticationMethod):
     return identity, False
 
 
-# Global list of default AuthenticationMethod classes to use for all request.
-_authenticators = [
+################################################################################
+## Authentication methods configuration.
+
+
+# Global list of default AuthenticationMethod classes to use for a request.
+# Can be overridden by call to 'configure'. Order is important!
+_auth_method_classes = [
   ServiceToServiceAuthentication,
   CookieAuthentication,
-  OAuthAuthentication
+  OAuthAuthentication,
 ]
 
 
-def bootstrap(authenticators=None):
-  """Global auth library configuration."""
-  global _authenticators
-  if authenticators is not None:
-    assert all(issubclass(cls, AuthenticationMethod) for cls in authenticators)
-    _authenticators = list(authenticators)
-  # Set up all necessary root entities.
-  model.bootstrap()
-  # Set up all initial secrets.
-  model.AuthSecret.bootstrap(
-      author=None,
-      name=XSRFToken.secret_key.name,
-      scope=XSRFToken.secret_key.scope)
+def configure(auth_methods):
+  """Global library configuration."""
+  global _auth_method_classes
+  assert all(issubclass(cls, AuthenticationMethod) for cls in auth_methods)
+  _auth_method_classes = list(auth_methods)

@@ -4,7 +4,7 @@
 
 """Main public interface of auth_ui component."""
 
-from . import api
+from . import rest_api
 from . import ui
 
 __all__ = ['configure', 'get_routes']
@@ -19,4 +19,4 @@ def configure(app_name, app_version, app_revision_url):
 
 def get_routes():
   """Return a list of webapp2 routes to add to WSGI application."""
-  return api.get_routes() + ui.get_routes()
+  return rest_api.get_routes() + ui.get_routes()

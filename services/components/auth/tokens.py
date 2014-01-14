@@ -2,7 +2,7 @@
 # Use of this source code is governed by the Apache v2.0 license that can be
 # found in the LICENSE file.
 
-"""Functions to generate and validate tokens."""
+"""Functions to generate and validate tokens with MAC tags."""
 
 import base64
 import hashlib
@@ -12,25 +12,28 @@ import time
 
 from . import api
 
-__all__ = ['InvalidTokenError', 'BadSecretError', 'Token']
+__all__ = [
+  'InvalidTokenError',
+  'Token',
+]
 
 
-# Name -> (hash to use, how many bytes of digest to use).
+# Name -> (hash algorithm to use, how many bytes of digest to use).
 MAC_ALGOS = {
   'hmac-sha256': (hashlib.sha256, 32),
 }
+
+
+# How much clock drift between machines we can tolerate, in seconds.
+ALLOWED_CLOCK_DRIFT_SEC = 30
 
 
 class InvalidTokenError(ValueError):
   """Token validation failed."""
 
 
-class BadSecretError(ValueError):
-  """Secret key is missing."""
-
-
 class Token(object):
-  """Base class for token types.
+  """Base class for a token kind.
 
   Usage:
     1) Define token class, configuring its kind, expiration, name of a secret:
@@ -71,10 +74,10 @@ class Token(object):
 
     # Fetch array of last secret values.
     secret = api.get_secret(cls.secret_key)
-    if not secret:
-      raise BadSecretError('Secret key is missing')
+    assert secret
 
-    # Append expiration timestamp (in milliseconds).
+    # Append 'issued' and 'expiration' timestamps (in milliseconds).
+    embedded['_i'] = str(int(time.time() * 1000))
     if cls.expiration_sec is not None:
       embedded['_x'] = str(int(time.time() * 1000 + cls.expiration_sec * 1000))
 
@@ -91,8 +94,7 @@ class Token(object):
 
     # Fetch array of last secret values.
     secret = api.get_secret(cls.secret_key)
-    if not secret:
-      raise BadSecretError('Secret key is missing')
+    assert secret
 
     # Decode token, use any recent value of secret to validate MAC.
     version, embedded = decode_token(
@@ -103,6 +105,13 @@ class Token(object):
       raise InvalidTokenError(
           'Bad token format version - '
           'expected %r, got %r' % (cls.version, version))
+
+    # Discard tokens from the future. Someone is messing with the clock.
+    issued_ts = embedded.pop('_i', None)
+    if issued_ts is None:
+      raise InvalidTokenError('Bad token: missing issued_ts')
+    if int(issued_ts) > (time.time() + ALLOWED_CLOCK_DRIFT_SEC) * 1000:
+      raise InvalidTokenError('Bad token: issued_ts is in the future')
 
     # Check expiration.
     if cls.expiration_sec is not None:
@@ -214,7 +223,7 @@ def decode_token(algo, token, possible_secrets, message):
     raise InvalidTokenError('Bad token format: %r' % token)
 
   # Validate MAC tag in constant time.
-  valid = False
+  valid = 0
   for secret in possible_secrets:
     good_mac = compute_mac(algo, secret, [str(version), public] + message)
     assert len(good_mac) == len(mac)
@@ -222,7 +231,7 @@ def decode_token(algo, token, possible_secrets, message):
     for x, y in zip(mac, good_mac):
       accum |= ord(x) ^ ord(y)
     if not accum:
-      valid |= True
+      valid |= 1
 
   # At least one secret key should match.
   if not valid:

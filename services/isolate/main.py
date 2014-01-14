@@ -22,7 +22,7 @@ def CreateApplication():
   """Bootstraps the app and creates the url router."""
   ereporter2.register_formatter()
   acl.bootstrap()
-  auth.bootstrap([
+  auth.configure([
     auth.ServiceToServiceAuthentication,
     auth.CookieAuthentication,
     auth.OAuthAuthentication,
