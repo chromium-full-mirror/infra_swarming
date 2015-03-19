@@ -32,7 +32,7 @@ libraries:
 
 skip_files:
 # Test and tools.
-- ^support/
+- support/
 - ^tests/
 - ^tools/
 - test_.+
