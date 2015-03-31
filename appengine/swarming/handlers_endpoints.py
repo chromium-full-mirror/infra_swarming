@@ -137,8 +137,7 @@ class SwarmingTaskService(remote.Service):
     return swarming_rpcs.TaskOutput(output=output)
 
   @auth.endpoints_method(
-      swarming_rpcs.TaskRequest, swarming_rpcs.TaskRequestMetadata,
-      http_method='POST')
+      swarming_rpcs.TaskRequest, swarming_rpcs.TaskRequestMetadata)
   @auth.require(acl.is_bot_or_user)
   def new(self, request):
     """Provides a TaskRequest and receive its metadata."""
@@ -189,8 +188,7 @@ class SwarmingTaskService(remote.Service):
 class SwarmingBotService(remote.Service):
   """Swarming's bot-related API."""
 
-  @auth.endpoints_method(
-      swarming_rpcs.BotId, swarming_rpcs.BotInfo, http_method='GET')
+  @auth.endpoints_method(swarming_rpcs.BotId, swarming_rpcs.BotInfo)
   @auth.require(acl.is_privileged_user)
   def get(self, request):
     """Provides BotInfo corresponding to a provided bot_id."""
@@ -208,9 +206,7 @@ class SwarmingBotService(remote.Service):
     bot_key.delete()
     return swarming_rpcs.DeletedResponse(deleted=True)
 
-  @auth.endpoints_method(
-      swarming_rpcs.BotTasksRequest, swarming_rpcs.BotTask,
-      http_method='GET')
+  @auth.endpoints_method(swarming_rpcs.BotTasksRequest, swarming_rpcs.BotTask)
   @auth.require(acl.is_privileged_user)
   def tasks(self, request):
     """Lists all of a given bot's tasks."""
@@ -228,8 +224,7 @@ class SwarmingBotService(remote.Service):
         now=utils.utcnow())
     return response
 
-  @auth.endpoints_method(
-      swarming_rpcs.BotsRequest, swarming_rpcs.BotList, http_method='GET')
+  @auth.endpoints_method(swarming_rpcs.BotsRequest, swarming_rpcs.BotList)
   @auth.require(acl.is_privileged_user)
   def list(self, request):
     """Provides list of bots."""
