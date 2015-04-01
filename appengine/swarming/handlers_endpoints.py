@@ -184,7 +184,7 @@ class SwarmingTaskService(remote.Service):
         state=state)
 
 
-@swarming_api.api_class(resource_name='bots')
+@swarming_api.api_class(resource_name='bots', path='bots')
 class SwarmingBotService(remote.Service):
   """Swarming's bot-related API."""
 
